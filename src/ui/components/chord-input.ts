@@ -1,5 +1,6 @@
 /**
- * 拼和弦作答器：3 八度可点选钢琴键盘 + 已选音名列表 + 「清空」「确认」。
+ * 拼和弦作答器：1.5 八度触控键盘（C2–C6 内切八度）+ 已选音名列表 + 「清空」「确认」。
+ * 已选音落在当前视窗外时，八度指示旁给「其他八度已选 N 键」提示。
  * 确认把选中 midi 数组交给 onSubmit（空选不提交）。
  */
 
@@ -23,13 +24,17 @@ export function chordInput(onSubmit: (midis: number[]) => void): ChordInput {
     notes.textContent = midis.length
       ? midis.map((m) => keyDefName(midiToKeyDef(m), true)).join(' · ')
       : '—';
+    // 已选音不在当前视窗：八度指示旁提示数量
+    const { startMidi, endMidi } = kb.getViewRange();
+    const off = midis.filter((m) => m < startMidi || m > endMidi).length;
+    kb.setHint(off > 0 ? `其他八度已选 ${off} 键` : null);
   };
 
   const kb = pianoKeyboard({
-    octaves: 3,
     interactive: true,
     labels: 'noteName',
     onToggle: refresh,
+    onViewChange: refresh,
   });
 
   const clearBtn = h('button', {

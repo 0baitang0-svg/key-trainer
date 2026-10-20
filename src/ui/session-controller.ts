@@ -6,7 +6,7 @@
 
 import type { AppState } from '../core/store';
 import { addXp, checkIn } from '../core/store';
-import type { Ask, Clef } from '../core/music-theory';
+import type { Ask, Clef, SigType } from '../core/music-theory';
 import { FL_ORDER, MAJ_GRID, MIN_GRID, SH_ORDER, noteInfo } from '../core/music-theory';
 import {
   buildOptions,
@@ -40,7 +40,7 @@ import type { AppContext } from './router';
 import { dateKeyOf } from './dom';
 
 /** 训练块类型 */
-export type BlockKind = PlanBlock['kind'] | 'free';
+export type BlockKind = PlanBlock['kind'] | 'free' | 'weak';
 export type SessionMode = 'daily' | 'free' | 'level';
 
 /** 每分钟预计题量（进度估算与限时上限） */
@@ -61,6 +61,8 @@ export interface SessionBlock {
   /** 题量与限时先到先止 */
   questionCount: number;
   durationMs: number;
+  /** 预计时长（分钟，首页汇总展示用） */
+  minutes: number;
   /** 曲目关卡块关联关卡 */
   levelId?: string;
 }
@@ -130,6 +132,7 @@ function timedBlock(
     pick,
     questionCount: Math.max(4, Math.round(minutes * QUESTIONS_PER_MINUTE)),
     durationMs: minutes * 60_000,
+    minutes,
   };
 }
 
@@ -186,6 +189,7 @@ export function chordMixBlock(minutes: number, focus?: string): SessionBlock {
     pick: { train: 'func', clefs: ['treble', 'bass'], asks: ['maj'], kinds, kindWeights },
     questionCount: Math.max(4, Math.round(minutes * QUESTIONS_PER_MINUTE)),
     durationMs: minutes * 60_000,
+    minutes,
   };
 }
 
@@ -243,6 +247,7 @@ export function planFromFree(cfg: FreeConfig): SessionPlan {
       },
       questionCount: QUESTIONS_PER_MINUTE,
       durationMs: 60_000,
+      minutes: 1,
     });
   }
   return { mode: 'free', title: '自由练习', blocks };
@@ -261,6 +266,7 @@ export function levelBlock(level: Level): SessionBlock {
     pick,
     questionCount: level.questionCount,
     durationMs: Number.POSITIVE_INFINITY,
+    minutes: 2,
     levelId: level.id,
   };
 }
@@ -272,6 +278,83 @@ export function planFromLevel(level: Level): SessionPlan {
     title: level.title,
     levelId: level.id,
     blocks: [levelBlock(level)],
+  };
+}
+
+/* ---------- 弱项专练 ---------- */
+
+/** 弱项专练目标（findWeakest / 统计条形行共用） */
+export interface WeakTarget {
+  train: TrainMode;
+  /** 焦点调号池（缺省 = 全范围） */
+  keys?: Array<{ type: SigType; n: number }>;
+  /** 和弦题型聚焦（缺省 = 该模式全题型） */
+  kinds?: QKind[];
+  /** 调号 / 模式描述 */
+  label: string;
+}
+
+/** 弱项来源（WeakSpot 可直接传入；统计条形行给部分字段即可） */
+export interface WeakTargetSource {
+  train: TrainMode;
+  label: string;
+  type?: SigType;
+  n?: number;
+  qkind?: string;
+}
+
+/** 弱项来源 → 专练目标（曲目认调退回认调直读） */
+export function weakTargetOf(src: WeakTargetSource): WeakTarget {
+  const train: TrainMode = src.train === 'piece' ? 'sig' : src.train;
+  const target: WeakTarget = { train, label: src.label };
+  if (train === 'sig' || train === 'note') {
+    if (src.type !== undefined && src.n !== undefined) {
+      target.keys = [{ type: src.type, n: src.n }];
+    }
+  } else if (src.qkind !== undefined) {
+    const pool = CHORD_TRAIN_KINDS[train as 'func' | 'diatonic' | 'degrees' | 'build'];
+    const qkind = pool.includes(src.qkind as QKind) ? (src.qkind as QKind) : undefined;
+    if (qkind !== undefined) {
+      // 弱项题型为主 + 同模式少量变式
+      target.kinds = [qkind, ...pool.filter((k) => k !== qkind).slice(0, 2)];
+    }
+  }
+  return target;
+}
+
+/** 焦点调号池：弱项调号 ×2 为主 + 邻近升降号数变式（0..7 内） */
+function focusKeyPool(keys: ReadonlyArray<{ type: SigType; n: number }>): Array<{ type: SigType; n: number }> {
+  const out: Array<{ type: SigType; n: number }> = [];
+  for (const k of keys) {
+    out.push({ type: k.type, n: k.n }, { type: k.type, n: k.n });
+    for (const d of [-1, 1]) {
+      const n = k.n + d;
+      if (n >= 0 && n <= 7) out.push({ type: k.type, n });
+    }
+  }
+  return out;
+}
+
+/** 弱项专练计划：只出弱项题目（train/type/n 或题型聚焦 + 少量变式） */
+export function planFromWeak(target: WeakTarget, minutes = 3): SessionPlan {
+  const pick: PickConfig = {
+    train: target.train,
+    clefs: ['treble', 'bass'],
+    asks: target.train === 'note' ? ['maj'] : ['maj', 'min'],
+  };
+  if (target.keys !== undefined && target.keys.length > 0) pick.keys = focusKeyPool(target.keys);
+  if (target.kinds !== undefined && target.kinds.length > 0) {
+    pick.kinds = target.kinds;
+    const kindWeights: Partial<Record<QKind, number>> = {};
+    target.kinds.forEach((k, i) => {
+      kindWeights[k] = i === 0 ? 3 : 1;
+    });
+    pick.kindWeights = kindWeights;
+  }
+  return {
+    mode: 'free',
+    title: `弱项专练 · ${target.label}`,
+    blocks: [timedBlock('weak', '弱项专练', pick, minutes, target.label)],
   };
 }
 

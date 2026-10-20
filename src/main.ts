@@ -15,13 +15,16 @@ import { App } from '@capacitor/app';
 import { createStorageAdapter } from './platform/storage-adapter';
 import { installBackHandler } from './platform/back-handler';
 import { showToast } from './ui/components/toast';
+import { interceptCoachBack } from './ui/components/coach-mark';
 import { Router, type AppContext, type Route, type ScreenFactories } from './ui/router';
+import { onboardingScreen } from './ui/screens/onboarding';
 import { homeScreen } from './ui/screens/home';
 import { sessionScreen } from './ui/screens/session';
 import { resultScreen } from './ui/screens/result';
 import { levelMapScreen } from './ui/screens/level-map';
 import { profileScreen } from './ui/screens/profile';
 import { applyFontClass, settingsScreen } from './ui/screens/settings';
+import { applyTheme } from './ui/theme';
 import { audioEngine } from './audio/engine';
 import { playClick, setMuted, setVolume } from './audio/sfx';
 
@@ -59,6 +62,7 @@ export async function mountApp(root: HTMLElement, options: MountOptions = {}): P
   };
 
   const factories: ScreenFactories = {
+    onboarding: () => onboardingScreen(ctx),
     home: () => homeScreen(ctx),
     session: (_ctx, params) => sessionScreen(ctx, params),
     result: (_ctx, params) => resultScreen(ctx, params),
@@ -69,10 +73,11 @@ export async function mountApp(root: HTMLElement, options: MountOptions = {}): P
 
   router = new Router(root, ctx, factories);
 
-  // 音频 / 字号设置落地
+  // 音频 / 字号 / 主题设置落地
   setVolume(state.config.volume);
   setMuted(!state.config.sound);
   applyFontClass(state.config.bigFont);
+  applyTheme(state.config.theme);
 
   // 浏览器自动播放策略：首次手势内预热音频
   const warmup = (): void => {
@@ -97,7 +102,8 @@ export async function mountApp(root: HTMLElement, options: MountOptions = {}): P
     }
   });
 
-  router.reset({ name: 'home' });
+  // 未完成新手引导先进引导页
+  router.reset(state.onboarded ? { name: 'home' } : { name: 'onboarding' });
 
   // 返回键：弹层优先 → 页面返回 → 主页两下退出
   installBackHandler({
@@ -110,7 +116,7 @@ export async function mountApp(root: HTMLElement, options: MountOptions = {}): P
       void App.exitApp();
     },
     onToast: showToast,
-    intercept: () => backInterceptor?.() === true,
+    intercept: () => interceptCoachBack() || backInterceptor?.() === true,
   });
 }
 

@@ -31,6 +31,8 @@ export interface AppConfig {
   bigFont: boolean;
   /** 首遇微课卡开关（关闭后不再弹任何微课卡） */
   showRuleCards: boolean;
+  /** 主题：深色玻璃 / 浅色玻璃 */
+  theme: 'dark' | 'light';
 }
 
 /** 关卡进度 */
@@ -62,10 +64,23 @@ export interface AppState {
   streak: StreakState;
   /** 首遇微课卡 id（见过即不再弹） */
   seenKeys: string[];
+  /** 是否已完成新手引导 */
+  onboarded: boolean;
+  /** 已展示过的一次性引导 / 提示标记 */
+  seenFlags: string[];
 }
 
 export function defaultConfig(): AppConfig {
-  return { clef: 'treble', ask: 'maj', train: 'sig', sound: true, volume: 0.8, bigFont: false, showRuleCards: true };
+  return {
+    clef: 'treble',
+    ask: 'maj',
+    train: 'sig',
+    sound: true,
+    volume: 0.8,
+    bigFont: false,
+    showRuleCards: true,
+    theme: 'dark',
+  };
 }
 
 export function createInitialState(): AppState {
@@ -79,6 +94,8 @@ export function createInitialState(): AppState {
     badges: [],
     streak: { dates: [], makeupDates: [] },
     seenKeys: [],
+    onboarded: false,
+    seenFlags: [],
   };
 }
 
@@ -144,6 +161,12 @@ function normalizeTrain(v: unknown): TrainMode {
   return 'sig';
 }
 
+function normalizeTheme(v: unknown): 'dark' | 'light' {
+  const s = asStr(v, '').toLowerCase();
+  if (s === 'light' || s === '浅' || s === '浅色') return 'light';
+  return 'dark';
+}
+
 function normalizeConfig(o: Dict): AppConfig {
   const d = defaultConfig();
   const soundRaw = pick(o, ['sound', 'soundOn', 'audio']);
@@ -157,6 +180,7 @@ function normalizeConfig(o: Dict): AppConfig {
     volume: clamp(asNum(volRaw, d.volume * 100) > 1 ? asNum(volRaw, d.volume * 100) / 100 : asNum(volRaw, d.volume), 0, 1),
     bigFont: asBool(pick(o, ['bigFont', 'big', 'largeFont']), d.bigFont),
     showRuleCards: asBool(pick(o, ['showRuleCards', 'ruleCards', 'showCards']), d.showRuleCards),
+    theme: normalizeTheme(pick(o, ['theme', 'themeMode', 'appearance'])),
   };
 }
 
@@ -314,6 +338,8 @@ export function migrate(raw: unknown): AppState {
     ),
     streak: normalizeStreak(pick(dataSource, ['streak', 'checkin', '打卡']) ?? pick(o, ['streak'])),
     seenKeys: asStrArray(pick(dataSource, ['seenKeys', 'seen', 'seenCards']) ?? pick(o, ['seenKeys'])),
+    onboarded: asBool(pick(dataSource, ['onboarded', 'onboard']) ?? pick(o, ['onboarded']), false),
+    seenFlags: asStrArray(pick(dataSource, ['seenFlags', 'flags']) ?? pick(o, ['seenFlags'])),
   };
 }
 
@@ -466,4 +492,17 @@ function dateKeyOf(d: Date): string {
 export function markSeen(state: AppState, cardId: string): AppState {
   if (state.seenKeys.includes(cardId)) return state;
   return { ...state, seenKeys: [...state.seenKeys, cardId] };
+}
+
+/* ---------- 一次性引导 / 提示标记 ---------- */
+
+/** 该引导标记是否已展示过 */
+export function hasSeenFlag(state: AppState, flag: string): boolean {
+  return state.seenFlags.includes(flag);
+}
+
+/** 标记引导 / 提示已展示（幂等：重复标记返回原状态） */
+export function markFlagSeen(state: AppState, flag: string): AppState {
+  if (state.seenFlags.includes(flag)) return state;
+  return { ...state, seenFlags: [...state.seenFlags, flag] };
 }

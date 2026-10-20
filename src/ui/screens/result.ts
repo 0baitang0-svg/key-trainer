@@ -1,13 +1,24 @@
 /**
- * 结果页：本节数字小结 + 经验增量 + 徽章解锁弹层 + 逐题回顾（点开看锚点）。
+ * 结果页：本节数字小结 + 「下一步」推荐卡 + 经验增量 + 徽章解锁弹层 + 逐题回顾（点开看锚点）。
  */
 
-import { h, icon, fmtMs, fmtPct } from '../dom';
+import { h, icon, fmtMs, fmtPct, todayKey } from '../dom';
 import type { AppContext, ScreenInstance } from '../router';
 import { staffView } from '../components/staff-view';
+import { mascot, type Mascot, type MascotMood } from '../components/mascot';
+import { showCoachOnce } from '../components/coach-mark';
 import { BADGES, checkBadges } from '../../content/badges';
+import { findWeakest } from '../../core/stats';
 import { playJingle } from '../../audio/sfx';
-import { anchorAccent, type QuestionRecord, type SessionPlan, type SessionSummary } from '../session-controller';
+import {
+  anchorAccent,
+  planFromDaily,
+  planFromWeak,
+  weakTargetOf,
+  type QuestionRecord,
+  type SessionPlan,
+  type SessionSummary,
+} from '../session-controller';
 
 function statCell(label: string, value: string): HTMLElement {
   return h('div', { className: 'stat' }, h('span', { className: 'stat__value', text: value }), h('span', { className: 'stat__label', text: label }));
@@ -51,6 +62,95 @@ export function resultScreen(ctx: AppContext, params: unknown): ScreenInstance {
         )
       : null;
 
+  const statsCard = h(
+    'section',
+    { className: 'card' },
+    h(
+      'div',
+      { className: 'stats-grid' },
+      statCell('正确率', fmtPct(summary.accuracy)),
+      statCell('反应中位', fmtMs(summary.medianMs)),
+      statCell('≤1.5s', fmtPct(summary.fastRatio)),
+      statCell('最高连击', String(summary.bestCombo)),
+    ),
+    h('div', { className: 'xp-gain' }, h('span', { className: 'xp-gain__num', text: `+${summary.xpEarned}` }), h('span', { text: ' 经验' })),
+  );
+
+  /* ---------- 「下一步」推荐卡（小结卡与逐题回顾之间，primary 在上） ---------- */
+
+  const mascots: Mascot[] = [];
+  const recMascot = (mood: MascotMood): HTMLElement => {
+    const m = mascot({ mood, size: 56, className: 'rec-card__mascot' });
+    mascots.push(m);
+    return m.root;
+  };
+  const weakest = findWeakest(ctx.getState().stats);
+  const doneToday = ctx.getState().streak.dates.includes(todayKey());
+
+  const recCard =
+    weakest !== null
+      ? h(
+          'section',
+          { className: 'card rec-card' },
+          h('h2', { className: 'card__title', text: '下一步' }),
+          h(
+            'div',
+            { className: 'rec-card__row' },
+            recMascot('thinking'),
+            h('p', {
+              className: 'rec-card__text',
+              text: `专练：${weakest.label} 还差一点（${fmtPct(weakest.emaAccuracy)}），练 3 分钟？`,
+            }),
+          ),
+          h('button', {
+            className: 'btn btn--primary btn--big',
+            text: '专练 3 分钟',
+            attrs: { type: 'button' },
+            on: {
+              click: () =>
+                ctx.reset({ name: 'session', params: { plan: planFromWeak(weakTargetOf(weakest), 3) } }),
+            },
+          }),
+        )
+      : !doneToday
+        ? h(
+            'section',
+            { className: 'card rec-card' },
+            h('h2', { className: 'card__title', text: '下一步' }),
+            h(
+              'div',
+              { className: 'rec-card__row' },
+              recMascot('happy'),
+              h('p', { className: 'rec-card__text', text: '今日训练还没做完，继续今日训练？' }),
+            ),
+            h('button', {
+              className: 'btn btn--primary btn--big',
+              text: '继续今日训练',
+              attrs: { type: 'button' },
+              on: {
+                click: () =>
+                  ctx.reset({ name: 'session', params: { plan: planFromDaily(ctx.getState()) } }),
+              },
+            }),
+          )
+        : h(
+            'section',
+            { className: 'card rec-card' },
+            h('h2', { className: 'card__title', text: '下一步' }),
+            h(
+              'div',
+              { className: 'rec-card__row' },
+              recMascot('neutral'),
+              h('p', { className: 'rec-card__text', text: '明日目标预览：调号全对挑战 · 约 5 分钟' }),
+            ),
+            h('button', {
+              className: 'btn btn--primary btn--big',
+              text: '再来一节',
+              attrs: { type: 'button' },
+              on: { click: () => ctx.reset({ name: 'session', params: { plan } }) },
+            }),
+          );
+
   const root = h(
     'section',
     { className: 'screen screen--result' },
@@ -67,27 +167,16 @@ export function resultScreen(ctx: AppContext, params: unknown): ScreenInstance {
     h(
       'div',
       { className: 'screen__body' },
-      h(
-        'section',
-        { className: 'card' },
-        h(
-          'div',
-          { className: 'stats-grid' },
-          statCell('正确率', fmtPct(summary.accuracy)),
-          statCell('反应中位', fmtMs(summary.medianMs)),
-          statCell('≤1.5s', fmtPct(summary.fastRatio)),
-          statCell('最高连击', String(summary.bestCombo)),
-        ),
-        h('div', { className: 'xp-gain' }, h('span', { className: 'xp-gain__num', text: `+${summary.xpEarned}` }), h('span', { text: ' 经验' })),
-      ),
+      statsCard,
       levelPanel,
+      recCard,
       h('h2', { className: 'section-title', text: '逐题回顾' }),
       reviewList,
       h(
         'div',
         { className: 'result-actions' },
         h('button', {
-          className: 'btn btn--primary btn--big',
+          className: 'btn btn--ghost btn--wide',
           text: summary.mode === 'level' ? '重打本关' : '再来一节',
           attrs: { type: 'button' },
           on: {
@@ -110,6 +199,16 @@ export function resultScreen(ctx: AppContext, params: unknown): ScreenInstance {
       ),
     ),
   );
+
+  /* ---------- 功能气泡：弱项专练（首次进结果页，只弹一次） ---------- */
+
+  const showSprintCoach = (): void => {
+    showCoachOnce(ctx, 'coach.sprint', {
+      target: statsCard,
+      title: '弱项专练',
+      body: '『弱项专练』挑你最差的调号/模式出题，就在下一步推荐卡里。',
+    });
+  };
 
   /* ---------- 徽章解锁弹层 ---------- */
 
@@ -144,6 +243,7 @@ export function resultScreen(ctx: AppContext, params: unknown): ScreenInstance {
               ctx.update((s) => ({ ...s, badges: [...s.badges, ...unlocked.map((b) => b.id)] }));
               badgePopup?.remove();
               badgePopup = null;
+              showSprintCoach();
             },
           },
         }),
@@ -152,10 +252,17 @@ export function resultScreen(ctx: AppContext, params: unknown): ScreenInstance {
     root.append(badgePopup);
   }, 350);
 
+  // 徽章弹层优先；没有弹层再弹气泡
+  const coachTimer = window.setTimeout(() => {
+    if (badgePopup === null) showSprintCoach();
+  }, 600);
+
   return {
     root,
     destroy(): void {
       window.clearTimeout(timer);
+      window.clearTimeout(coachTimer);
+      for (const m of mascots) m.destroy();
     },
   };
 }

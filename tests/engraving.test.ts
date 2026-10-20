@@ -81,14 +81,14 @@ describe('槽位回归（2026-10 修复点）', () => {
 });
 
 describe('accent 高亮（直读锚点动画）', () => {
-  it('accent=k 时第 k 个升降号加朱红描边', () => {
+  it('accent=k 时第 k 个升降号加主题色描边', () => {
     const svg = buildStaff({ clef: 'treble', type: 'sh', n: 3, accent: 2 });
     const groups = svg.match(/<g class="acc[^"]*"[^>]*>/g) ?? [];
     expect(groups).toHaveLength(3);
     expect(groups.filter((g) => g.includes('acc-accent'))).toHaveLength(1);
     expect(groups[2]).toContain('acc-accent');
     expect(svg).toContain(`stroke="${ACCENT_STROKE}"`);
-    expect(ACCENT_STROKE).toBe('#B5402D');
+    expect(ACCENT_STROKE).toBe('var(--accent)');
     // 非高亮的升降号不带 stroke
     expect(groups[0]).not.toContain('stroke');
     expect(groups[1]).not.toContain('stroke');
@@ -209,7 +209,7 @@ describe('和弦堆叠渲染（notes / chordSymbolText）', () => {
     expect(svg).toContain('x="42"');
     expect(svg).toContain('y="54"'); // 120 - 4*12 - 18
     expect(svg).toContain('font-family="var(--serif)"');
-    expect(svg).toContain('fill="var(--ink)"');
+    expect(svg).toContain('fill="var(--staff-ink)"');
   });
 
   it('notes 与单音 step 并存时 notes 优先', () => {

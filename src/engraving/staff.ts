@@ -16,8 +16,8 @@ export const STAFF_X1 = 600;
 /** 谱表底线 y */
 export const STAFF_BOTTOM = 120;
 export const STAFF_VIEWBOX = '0 0 640 170';
-/** 朱红 accent（直读锚点高亮描边） */
-export const ACCENT_STROKE = '#B5402D';
+/** 主题 accent 描边（直读锚点高亮，CSS 变量随主题切换） */
+export const ACCENT_STROKE = 'var(--accent)';
 
 /** 和弦堆叠里的单个音符头（step 同单音语义：0=第1线，超出范围自动加线） */
 export interface StaffNote {
@@ -67,7 +67,7 @@ export function glyphSVG(
 function ledgerLine(cx: number, y: number): string {
   return (
     '<line class="ledger" x1="' + (cx - 11) + '" y1="' + y + '" x2="' + (cx + 11) + '" y2="' + y +
-    '" stroke="var(--ink)" stroke-width="1.6"/>'
+    '" stroke="var(--staff-ink)" stroke-width="1.6"/>'
   );
 }
 
@@ -107,7 +107,7 @@ export function buildStaff(opts: StaffOptions): string {
   const treble = clef === 'treble';
   const clefName: GlyphName = treble ? 'gClef' : 'fClef';
   const clefY = treble ? bottom - S : bottom - 3 * S;
-  s += glyphSVG(clefName, 56, clefY, S, 'var(--ink)', undefined, 'clef');
+  s += glyphSVG(clefName, 56, clefY, S, 'var(--staff-ink)', undefined, 'clef');
 
   if (n > 0) {
     const steps = treble ? (type === 'sh' ? TSH : TFL) : (type === 'sh' ? BSH : BFL);
@@ -122,7 +122,7 @@ export function buildStaff(opts: StaffOptions): string {
         x + off,
         bottom - steps[i] * (S / 2),
         S,
-        'var(--ink)',
+        'var(--staff-ink)',
         hot ? ACCENT_STROKE : undefined,
         hot ? 'acc acc-accent' : 'acc',
       );
@@ -156,31 +156,31 @@ export function buildStaff(opts: StaffOptions): string {
       for (let k = 0; k < count; k++) {
         const gap = count === 2 ? (k === 0 ? -0.35 * S : 0.35 * S) : 0;
         const off = -GLYPHS[gname].adv * u * 0.5;
-        s += glyphSVG(gname, p.x - 16 + gap + off, p.y, S, 'var(--ink)', undefined, 'note-acc');
+        s += glyphSVG(gname, p.x - 16 + gap + off, p.y, S, 'var(--staff-ink)', undefined, 'note-acc');
       }
     }
     for (const p of placed) {
-      s += '<ellipse class="notehead" cx="' + p.x + '" cy="' + p.y + '" rx="7.6" ry="5.4" transform="rotate(-16 ' + p.x + ' ' + p.y + ')" fill="var(--ink)"/>';
+      s += '<ellipse class="notehead" cx="' + p.x + '" cy="' + p.y + '" rx="7.6" ry="5.4" transform="rotate(-16 ' + p.x + ' ' + p.y + ')" fill="var(--staff-ink)"/>';
     }
     // 单符干：从最低音符头出发（最低音 step<4 向上长 44，否则反向向下）
     const lowest = placed.reduce((a, b) => (b.y > a.y ? b : a));
-    if (lowest.step < 4) s += '<rect class="stem" x="' + (lowest.x + 6.9) + '" y="' + (lowest.y - 43) + '" width="1.7" height="44" fill="var(--ink)"/>';
-    else s += '<rect class="stem" x="' + (lowest.x - 8.6) + '" y="' + (lowest.y - 1) + '" width="1.7" height="44" fill="var(--ink)"/>';
+    if (lowest.step < 4) s += '<rect class="stem" x="' + (lowest.x + 6.9) + '" y="' + (lowest.y - 43) + '" width="1.7" height="44" fill="var(--staff-ink)"/>';
+    else s += '<rect class="stem" x="' + (lowest.x - 8.6) + '" y="' + (lowest.y - 1) + '" width="1.7" height="44" fill="var(--staff-ink)"/>';
   } else if (step != null) {
     const y = bottom - step * (S / 2);
     const cx = 350;
     // 加线：偶数 step 在谱外时补短横线（step ≤ -2 或 ≥ 10）
     for (let e = -2; e >= step; e -= 2) s += ledgerLine(cx, bottom - e * (S / 2));
     for (let e = 10; e <= step; e += 2) s += ledgerLine(cx, bottom - e * (S / 2));
-    s += '<ellipse class="notehead" cx="' + cx + '" cy="' + y + '" rx="7.6" ry="5.4" transform="rotate(-16 ' + cx + ' ' + y + ')" fill="var(--ink)"/>';
-    if (step < 4) s += '<rect class="stem" x="' + (cx + 6.9) + '" y="' + (y - 43) + '" width="1.7" height="44" fill="var(--ink)"/>';
-    else s += '<rect class="stem" x="' + (cx - 8.6) + '" y="' + (y - 1) + '" width="1.7" height="44" fill="var(--ink)"/>';
+    s += '<ellipse class="notehead" cx="' + cx + '" cy="' + y + '" rx="7.6" ry="5.4" transform="rotate(-16 ' + cx + ' ' + y + ')" fill="var(--staff-ink)"/>';
+    if (step < 4) s += '<rect class="stem" x="' + (cx + 6.9) + '" y="' + (y - 43) + '" width="1.7" height="44" fill="var(--staff-ink)"/>';
+    else s += '<rect class="stem" x="' + (cx - 8.6) + '" y="' + (y - 1) + '" width="1.7" height="44" fill="var(--staff-ink)"/>';
   }
 
   if (chordSymbolText) {
     // 和弦号：谱面左上、第 5 线上方约 18 单位，serif 字体
     s += '<text class="chord-symbol" x="' + (x0 + 2) + '" y="' + (bottom - 4 * S - 18) +
-      '" font-family="var(--serif)" font-size="20" fill="var(--ink)">' + escapeXML(chordSymbolText) + '</text>';
+      '" font-family="var(--serif)" font-size="20" fill="var(--staff-ink)">' + escapeXML(chordSymbolText) + '</text>';
   }
 
   return s;

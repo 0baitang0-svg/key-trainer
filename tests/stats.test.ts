@@ -190,6 +190,7 @@ describe('v1 → v2 迁移与导入导出', () => {
       volume: 0.55,
       bigFont: true,
       showRuleCards: true,
+      theme: 'dark',
     });
     const item = s.stats.items['sig|sh|3|bass|min'];
     expect(item).toMatchObject({

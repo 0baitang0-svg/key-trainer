@@ -294,3 +294,103 @@ export function aggregate(records: ReadonlyArray<AttemptRecord>, now: number = D
     modeBars,
   };
 }
+
+/* ---------- 弱项查找 ---------- */
+
+/** 弱项最少样本数（attempts 达标才参与判定） */
+export const WEAK_MIN_ATTEMPTS = 5;
+
+/** 弱项条目（findWeakest 结果） */
+export interface WeakSpot {
+  /** 条目 key：train|type|n|clef|ask[|qkind] */
+  key: string;
+  train: TrainMode;
+  type: SigType;
+  n: number;
+  clef: Clef;
+  ask: Ask;
+  /** 和弦题型（条目 key 第 6 段） */
+  qkind?: string;
+  attempts: number;
+  /** 弱项正确率（emaAccuracy） */
+  emaAccuracy: number;
+  /** 调号 / 模式描述，如「3♯ · 认调」「和弦归属 · 属七归调」 */
+  label: string;
+}
+
+/** 训练模式中文名（弱项描述用） */
+const WEAK_TRAIN_LABELS: Record<string, string> = {
+  sig: '认调',
+  note: '认音',
+  piece: '曲目认调',
+  func: '和弦归属',
+  diatonic: '顺阶和弦',
+  degrees: '键盘音级',
+  build: '和弦构建',
+};
+
+/** 和弦题型中文名（弱项描述用） */
+const QKIND_LABELS: Record<string, string> = {
+  'dom-key': '属七归调',
+  'key-dom': '调归属七',
+  'listen-func': '听辨功能',
+  deg2chord: '级数报和弦',
+  chord2deg: '和弦报级数',
+  chord2func: '和弦报功能',
+  key2acc: '调内变化音',
+  deg2note: '级数音名',
+  acc2key: '变化音归调',
+  'build-notes': '拼组成音',
+  'build-mc': '键盘拼和弦',
+  notes2quality: '辨和弦性质',
+};
+
+/** 条目 key + 学习状态 → 弱项条目（key 格式非法返回 null） */
+export function weakSpotOf(key: string, item: ItemStat): WeakSpot | null {
+  const parts = key.split('|');
+  if (parts.length < 5) return null;
+  const train = (WEAK_TRAIN_LABELS[parts[0]] !== undefined ? parts[0] : 'sig') as TrainMode;
+  const type: SigType = parts[1] === 'fl' ? 'fl' : 'sh';
+  const n = Number(parts[2]) || 0;
+  const clef: Clef = parts[3] === 'bass' ? 'bass' : 'treble';
+  const ask: Ask = parts[4] === 'min' ? 'min' : 'maj';
+  const qkind = parts.length > 5 ? parts[5] : undefined;
+  const trainLabel = WEAK_TRAIN_LABELS[train] ?? train;
+  const label =
+    qkind !== undefined
+      ? `${trainLabel} · ${QKIND_LABELS[qkind] ?? qkind}`
+      : `${n}${type === 'sh' ? '♯' : '♭'} · ${trainLabel}`;
+  return {
+    key,
+    train,
+    type,
+    n,
+    clef,
+    ask,
+    ...(qkind !== undefined ? { qkind } : {}),
+    attempts: item.attempts,
+    emaAccuracy: item.emaAccuracy,
+    label,
+  };
+}
+
+/**
+ * 最弱项：attempts ≥ minAttempts 的条目里 emaAccuracy 最低者（并列取样本多的）。
+ * 没有够样本的条目返回 null。
+ */
+export function findWeakest(stats: StatsState, minAttempts: number = WEAK_MIN_ATTEMPTS): WeakSpot | null {
+  let best: WeakSpot | null = null;
+  for (const [key, item] of Object.entries(stats.items)) {
+    if (item.attempts < minAttempts) continue;
+    const spot = weakSpotOf(key, item);
+    if (spot === null) continue;
+    if (
+      best === null ||
+      spot.emaAccuracy < best.emaAccuracy ||
+      (spot.emaAccuracy === best.emaAccuracy && spot.attempts > best.attempts)
+    ) {
+      best = spot;
+    }
+  }
+  return best;
+}

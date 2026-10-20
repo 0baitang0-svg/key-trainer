@@ -6,7 +6,7 @@
 
 import type { AppState } from '../core/store';
 
-export type RouteName = 'home' | 'session' | 'result' | 'level-map' | 'profile' | 'settings';
+export type RouteName = 'onboarding' | 'home' | 'session' | 'result' | 'level-map' | 'profile' | 'settings';
 
 export interface Route {
   name: RouteName;

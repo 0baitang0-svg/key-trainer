@@ -12,9 +12,10 @@ import { chordInput, type ChordInput } from '../components/chord-input';
 import { pianoKeyboard, pianoKeyDefs, type KeyMark } from '../components/piano-keyboard';
 import { staffOptionsFor, staffView } from '../components/staff-view';
 import { feedbackBanner, ruleCardSheet, type FeedbackBanner } from '../components/feedback-banner';
+import { showCoachOnce } from '../components/coach-mark';
 import { firstSeen, firstSeenChord } from '../../content/rules-cards';
 import { findPiece } from '../../content/repertoire';
-import { markSeen } from '../../core/store';
+import { hasSeenFlag, markSeen } from '../../core/store';
 import { findLevel } from '../../core/levels';
 import {
   CHORD_INTERVALS,
@@ -92,6 +93,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   const stage = h('div', { className: 'session__stage' });
   const padHost = h('div', { className: 'session__pad' });
   const overlay = h('div', { className: 'session__overlay' });
+  const hintEl = h('div', { className: 'session__hint', text: '上滑跳过 · 下滑收藏' });
 
   const comboNum = h('span', { className: 'combo__num', text: '0' });
   const progressFill = h('div', { className: 'progress__fill' });
@@ -121,7 +123,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       h('div', { className: 'combo' }, comboNum, h('span', { className: 'combo__label', text: '连击' })),
     ),
     stage,
-    h('div', { className: 'session__hint', text: '上滑跳过 · 下滑收藏' }),
+    hintEl,
     padHost,
     overlay,
   );
@@ -131,11 +133,66 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   let feedback: FeedbackBanner | null = null;
   /** 当前弹层的关闭动作（返回键拦截用，无弹层时为 null） */
   let overlayCloser: (() => void) | null = null;
+  /** 退出确认弹层的关闭动作（返回键拦截用，无弹层时为 null） */
+  let confirmCloser: (() => void) | null = null;
   let combo = 0;
   let blockRecordStart = 0;
   let lastBlock: SessionBlock | null = null;
   let destroyed = false;
+  /** 已出题数（手势提示等一次性引导按题号触发） */
+  let askCount = 0;
   const timers: number[] = [];
+
+  /* ---------- 功能气泡队列（串行弹，微课卡弹层优先） ---------- */
+
+  interface CoachJob {
+    /** 盖在弹层上弹（微课卡气泡专用） */
+    overOverlay: boolean;
+    run(): void;
+  }
+  const coachQueue: CoachJob[] = [];
+  let coachBusy = false;
+
+  function pumpCoach(): void {
+    if (coachBusy || coachQueue.length === 0) return;
+    const head = coachQueue[0];
+    if (overlayCloser !== null && !head.overOverlay) return;
+    coachQueue.shift();
+    coachBusy = true;
+    head.run();
+  }
+
+  /** 排一条只弹一次的气泡：已见过不排；锚点没了 / 已弹过则跳过 */
+  function offerCoach(
+    flag: string,
+    target: () => Element | null,
+    title: string,
+    body: string,
+    overOverlay = false,
+  ): void {
+    if (hasSeenFlag(ctx.getState(), flag)) return;
+    coachQueue.push({
+      overOverlay,
+      run(): void {
+        const el = target();
+        if (el === null || !el.isConnected || hasSeenFlag(ctx.getState(), flag)) {
+          coachBusy = false;
+          pumpCoach();
+          return;
+        }
+        showCoachOnce(ctx, flag, {
+          target: el,
+          title,
+          body,
+          onDone: () => {
+            coachBusy = false;
+            pumpCoach();
+          },
+        });
+      },
+    });
+    pumpCoach();
+  }
 
   const later = (fn: () => void, ms: number): void => {
     timers.push(window.setTimeout(fn, ms));
@@ -353,6 +410,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   /* ---------- 流程 ---------- */
 
   function askCurrent(cq: CurrentQuestion): void {
+    askCount++;
     lastBlock = cq.block;
     renderHead(cq);
     renderStage(cq);
@@ -395,13 +453,31 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
         controller.markShown();
         pad?.setDisabled(false);
         chordIn?.setDisabled(false);
+        pumpCoach(); // 卡片关掉后补弹排队的气泡
       };
       const sheet = ruleCardSheet(card, dismiss);
       overlayCloser = () => dismiss(false); // 返回键关卡 = 跳过
       overlay.replaceChildren(sheet.root);
+      // 首次弹微课卡：气泡盖在卡片上方（先看 flag，只弹一次）
+      offerCoach(
+        'coach.rulecard',
+        () => sheet.root.querySelector('.rule-card'),
+        '微课卡',
+        '这是微课卡：30 秒记住一条读谱规则。可在设置里关掉。',
+        true,
+      );
     } else {
       controller.markShown();
     }
+
+    // 一次性功能气泡：第 2 题提手势、拼和弦键盘题提键盘用法
+    if (askCount === 2) {
+      offerCoach('coach.swipe', () => hintEl, '滑动手势', '上滑跳过本题，下滑收藏，回头在结果页复习。');
+    }
+    if (input === 'keyboard-build') {
+      offerCoach('coach.keyboard', () => chordIn?.root ?? null, '键盘拼和弦', '点选或划过即选键；左右滑动键盘区换八度，音符记在下方。');
+    }
+    pumpCoach();
   }
 
   function submitAnswer(answer: string | readonly number[], cq: CurrentQuestion): void {
@@ -507,7 +583,62 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
     ctx.reset({ name: 'result', params: { summary, plan } });
   }
 
+  /** 已作答（计入统计）的题数 */
+  function answeredCount(): number {
+    return controller.allRecords.filter((r) => !r.skipped).length;
+  }
+
+  /** 退出确认底板：已答题时先确认，未答题直接走 */
+  function showExitConfirm(): void {
+    if (confirmCloser !== null) return;
+    const close = (): void => {
+      confirmCloser = null;
+      sheet.remove();
+      overlay.replaceChildren();
+    };
+    const sheet = h(
+      'div',
+      { className: 'sheet-wrap' },
+      h(
+        'div',
+        { className: 'sheet exit-confirm' },
+        h('h2', { className: 'sheet__title', text: '结束本节？' }),
+        h('p', { className: 'exit-confirm__note', text: `已答 ${answeredCount()} 题会计入统计` }),
+        h('button', {
+          className: 'btn btn--primary btn--wide',
+          text: '继续练习',
+          attrs: { type: 'button' },
+          on: { click: close },
+        }),
+        h('button', {
+          className: 'btn btn--ghost btn--wide',
+          text: '结束',
+          attrs: { type: 'button' },
+          on: {
+            click: () => {
+              close();
+              ctx.back();
+            },
+          },
+        }),
+      ),
+    );
+    confirmCloser = close;
+    overlay.replaceChildren(sheet);
+  }
+
   function leave(): void {
+    if (confirmCloser !== null) return;
+    if (overlayCloser !== null) {
+      const close = overlayCloser;
+      overlayCloser = null;
+      close();
+      return;
+    }
+    if (answeredCount() > 0) {
+      showExitConfirm();
+      return;
+    }
     ctx.back();
   }
 
@@ -548,6 +679,8 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       return;
     }
     if (overlay.querySelector('.sheet-wrap') !== null) return;
+    // 功能气泡展示中不作答（气泡蒙层挡住点击，键盘同样屏蔽）
+    if (document.querySelector('.coach-mark') !== null) return;
     if (e.key >= '1' && e.key <= '9') {
       pad?.pickAt(Number(e.key) - 1);
     }
@@ -573,13 +706,25 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   // 启动
   later(() => next(), 0);
 
-  // 返回键拦截：弹层（微课卡 / 块小结 / 反馈条）优先关闭
+  // 返回键拦截：退出确认 → 弹层（微课卡 / 块小结 / 反馈条）→ 已答题先确认、未答题放行页面返回
   ctx.setBackInterceptor(() => {
-    if (overlayCloser === null) return false;
-    const close = overlayCloser;
-    overlayCloser = null;
-    close();
-    return true;
+    if (confirmCloser !== null) {
+      const close = confirmCloser;
+      confirmCloser = null;
+      close();
+      return true;
+    }
+    if (overlayCloser !== null) {
+      const close = overlayCloser;
+      overlayCloser = null;
+      close();
+      return true;
+    }
+    if (answeredCount() > 0) {
+      showExitConfirm();
+      return true;
+    }
+    return false;
   });
 
   return {
@@ -595,6 +740,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       stage.removeEventListener('touchend', onTouchEnd);
       ctx.setBackInterceptor(null);
       overlayCloser = null;
+      confirmCloser = null;
     },
   };
 }

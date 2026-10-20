@@ -21,7 +21,7 @@ const LETTERS = 'ABCDEFG';
 /** 音名 + 八度 → 谱面 step（0=第1线，高音 E4 / 低音 G2 为基准） */
 function staffStepOf(p: PitchName, oct: number, clef: 'treble' | 'bass'): number {
   const li = LETTERS.indexOf(p.letter);
-  const base = clef === 'treble' ? { li: 2, oct: 4 } : { li: 4, oct: 2 };
+  const base = clef === 'treble' ? { li: 4, oct: 4 } : { li: 6, oct: 2 };
   return (oct - base.oct) * 7 + li - base.li;
 }
 

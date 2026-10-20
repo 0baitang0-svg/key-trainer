@@ -1,10 +1,14 @@
 /**
  * 统计页：7 日题数 / 正确率小图、每调号正确率条形（弱项标红）、模式表现条形、徽章墙、打卡日历。
+ * 弱项行（正确率 <70% 且样本 ≥5）行尾带「专练」直达针对性 session。
  */
 
-import { aggregate } from '../../core/stats';
+import { aggregate, WEAK_MIN_ATTEMPTS } from '../../core/stats';
+import type { TrainMode } from '../../core/question-generator';
 import { h, icon, dateKeyOf, fmtPct } from '../dom';
 import type { AppContext, ScreenInstance } from '../router';
+import { showCoachOnce } from '../components/coach-mark';
+import { planFromWeak, weakTargetOf, type WeakTargetSource } from '../session-controller';
 import { badgeWall } from './result';
 
 /** 训练模式 → 中文名（「模式表现」条形区） */
@@ -18,9 +22,14 @@ const TRAIN_LABELS: Record<string, string> = {
   build: '和弦构建',
 };
 
-/** 正确率条形行（调号 / 模式共用；<70% 标红） */
-function accBarRow(label: string, accuracy: number | null): HTMLElement {
+/** 正确率条形行（调号 / 模式共用；<70% 标红；弱项行尾可挂「专练」） */
+function accBarRow(
+  label: string,
+  accuracy: number | null,
+  opts: { attempts?: number; onDrill?: () => void } = {},
+): HTMLElement {
   const weak = accuracy !== null && accuracy < 0.7;
+  const drillable = weak && (opts.attempts ?? 0) >= WEAK_MIN_ATTEMPTS && opts.onDrill !== undefined;
   return h(
     'div',
     { className: `keybar${weak ? ' is-weak' : ''}` },
@@ -34,6 +43,14 @@ function accBarRow(label: string, accuracy: number | null): HTMLElement {
       }),
     ),
     h('span', { className: 'keybar__value', text: fmtPct(accuracy) }),
+    drillable
+      ? h('button', {
+          className: 'keybar__drill',
+          text: '专练',
+          attrs: { type: 'button' },
+          on: { click: opts.onDrill },
+        })
+      : null,
   );
 }
 
@@ -94,6 +111,29 @@ export function profileScreen(ctx: AppContext): ScreenInstance {
     );
   }
 
+  // 「专练」直达弱项针对性 session（与结果页推荐卡共用 planFromWeak / weakTargetOf）
+  const startWeak = (src: WeakTargetSource): void => {
+    ctx.navigate({ name: 'session', params: { plan: planFromWeak(weakTargetOf(src), 3) } });
+  };
+
+  const keybarCard = h(
+    'section',
+    { className: 'card' },
+    agg.keyBars.length === 0
+      ? h('p', { className: 'card__note', text: '还没有数据，练一节就会出现' })
+      : h(
+          'div',
+          { className: 'keybars' },
+          ...agg.keyBars.map((k) => {
+            const label = `${k.n}${k.type === 'sh' ? '♯' : '♭'}`;
+            return accBarRow(label, k.accuracy, {
+              attempts: k.count,
+              onDrill: () => startWeak({ train: 'sig', type: k.type, n: k.n, label: `${label} · 认调` }),
+            });
+          }),
+        ),
+  );
+
   const root = h(
     'section',
     { className: 'screen screen--profile' },
@@ -126,17 +166,7 @@ export function profileScreen(ctx: AppContext): ScreenInstance {
       h('h2', { className: 'section-title', text: '最近 7 天' }),
       weeklyChart(agg.daily),
       h('h2', { className: 'section-title', text: '每调号正确率' }),
-      h(
-        'section',
-        { className: 'card' },
-        agg.keyBars.length === 0
-          ? h('p', { className: 'card__note', text: '还没有数据，练一节就会出现' })
-          : h(
-              'div',
-              { className: 'keybars' },
-              ...agg.keyBars.map((k) => accBarRow(`${k.n}${k.type === 'sh' ? '♯' : '♭'}`, k.accuracy)),
-            ),
-      ),
+      keybarCard,
       h('h2', { className: 'section-title', text: '模式表现' }),
       h(
         'section',
@@ -144,7 +174,16 @@ export function profileScreen(ctx: AppContext): ScreenInstance {
         h(
           'div',
           { className: 'keybars' },
-          ...agg.modeBars.map((m) => accBarRow(TRAIN_LABELS[m.train] ?? m.train, m.accuracy)),
+          ...agg.modeBars.map((m) =>
+            accBarRow(TRAIN_LABELS[m.train] ?? m.train, m.accuracy, {
+              attempts: m.count,
+              onDrill: () =>
+                startWeak({
+                  train: m.train as TrainMode,
+                  label: TRAIN_LABELS[m.train] ?? m.train,
+                }),
+            }),
+          ),
         ),
       ),
       h('h2', { className: 'section-title', text: '徽章墙' }),
@@ -153,5 +192,20 @@ export function profileScreen(ctx: AppContext): ScreenInstance {
       h('div', { className: 'cal' }, ...days),
     ),
   );
-  return { root };
+
+  // 功能气泡：弱项红条（首次进统计页，只弹一次；有弱项行就锚定红条）
+  const coachTimer = window.setTimeout(() => {
+    showCoachOnce(ctx, 'coach.weakbar', {
+      target: root.querySelector('.keybar.is-weak') ?? keybarCard,
+      title: '弱项红条',
+      body: '红条是弱项（正确率 <70%），可以点『专练』直接开练。',
+    });
+  }, 300);
+
+  return {
+    root,
+    destroy(): void {
+      window.clearTimeout(coachTimer);
+    },
+  };
 }

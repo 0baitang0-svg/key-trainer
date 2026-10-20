@@ -1,11 +1,12 @@
 /**
- * 设置页：音量 / 静音、大字模式、提示卡、导出导入 JSON、重置数据（二次确认）。
+ * 设置页：音量 / 静音、大字模式、主题、提示卡、导出导入 JSON、重置数据（二次确认）。
  */
 
 import { createInitialState, exportJSON, importJSON } from '../../core/store';
 import { setMuted, setVolume } from '../../audio/sfx';
 import { h, icon } from '../dom';
 import { showToast } from '../components/toast';
+import { applyTheme, type Theme } from '../theme';
 import type { AppContext, ScreenInstance } from '../router';
 
 function row(title: string, note: string, control: HTMLElement): HTMLElement {
@@ -31,6 +32,31 @@ function toggle(on: boolean, onChange: (v: boolean) => void): HTMLElement {
     },
   }, h('span', { className: 'toggle__knob' }));
   return btn;
+}
+
+/** 主题分段切换（深色玻璃 / 浅色玻璃） */
+function themeSeg(value: Theme, onChange: (v: Theme) => void): HTMLElement {
+  const group = h('div', { className: 'seg', attrs: { role: 'group', 'aria-label': '主题' } });
+  const options: Array<{ value: Theme; label: string }> = [
+    { value: 'dark', label: '深色玻璃' },
+    { value: 'light', label: '浅色玻璃' },
+  ];
+  for (const o of options) {
+    const btn = h('button', {
+      className: `seg__btn${o.value === value ? ' is-active' : ''}`,
+      text: o.label,
+      attrs: { type: 'button' },
+      on: {
+        click: () => {
+          for (const b of Array.from(group.children)) b.classList.remove('is-active');
+          btn.classList.add('is-active');
+          onChange(o.value);
+        },
+      },
+    });
+    group.append(btn);
+  }
+  return group;
 }
 
 /** armed 二次确认按钮（4 秒超时还原），返回按钮元素与取消计时方法 */
@@ -104,6 +130,11 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
     ctx.update((s) => ({ ...s, config: { ...s.config, bigFont: on } }));
   });
 
+  const themeControl = themeSeg(state.config.theme, (v) => {
+    applyTheme(v);
+    ctx.update((s) => ({ ...s, config: { ...s.config, theme: v } }));
+  });
+
   /* ---------- 导出 / 导入弹层 ---------- */
 
   const overlay = h('div', { className: 'session__overlay' });
@@ -153,6 +184,7 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
                   const next = importJSON(textarea.value);
                   ctx.update(() => next);
                   applyFontClass(next.config.bigFont);
+                  applyTheme(next.config.theme);
                   setVolume(next.config.volume);
                   setMuted(!next.config.sound);
                   note.textContent = '导入成功。';
@@ -185,11 +217,24 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
     showToast('已清空，下次训练会重新弹卡');
   });
 
+  /* ---------- 引导（二次确认） ---------- */
+
+  const replayOnboardingBtn = armedButton('重看新手引导', '再点一次确认重看', () => {
+    ctx.update((s) => ({ ...s, onboarded: false }));
+    ctx.reset({ name: 'onboarding' });
+  });
+
+  const resetCoachBtn = armedButton('重置提示', '再点一次确认清空', () => {
+    ctx.update((s) => ({ ...s, seenFlags: [] }));
+    showToast('已重置，提示气泡会重新弹');
+  });
+
   /* ---------- 重置（二次确认） ---------- */
 
   const resetBtn = armedButton('重置数据', '再点一次确认清空', () => {
     ctx.update(() => createInitialState());
     applyFontClass(false);
+    applyTheme('dark');
     setVolume(0.8);
     setMuted(false);
     ctx.reset({ name: 'home' });
@@ -208,6 +253,16 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
       { className: 'card' },
       h('h2', { className: 'card__title', text: '显示' }),
       row('大字模式', '整体放大字号，谱面同步缩放', fontToggle),
+      row('主题', '深色玻璃 / 浅色玻璃，即点即换', themeControl),
+    ),
+    h(
+      'section',
+      { className: 'card' },
+      h('h2', { className: 'card__title', text: '引导' }),
+      replayOnboardingBtn.root,
+      h('p', { className: 'card__note', text: '重新看一遍四屏新手引导。' }),
+      resetCoachBtn.root,
+      h('p', { className: 'card__note', text: '清空提示气泡的「已看过」标记，气泡会重新弹。' }),
     ),
     h(
       'section',
@@ -254,6 +309,8 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
     destroy(): void {
       resetBtn.cancelArm();
       resetCardsBtn.cancelArm();
+      replayOnboardingBtn.cancelArm();
+      resetCoachBtn.cancelArm();
     },
   };
 }

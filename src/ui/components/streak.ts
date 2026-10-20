@@ -4,11 +4,11 @@
 
 import { h, icon } from '../dom';
 
-/** 火苗 + 连续天数（0 天给鼓励文案） */
+/** 火苗 + 连续天数（0 天给鼓励文案；≥3 天 streak--hot 呼吸 glow） */
 export function streakBadge(days: number): HTMLElement {
   return h(
     'div',
-    { className: `streak${days > 0 ? ' streak--on' : ''}` },
+    { className: `streak${days > 0 ? ' streak--on' : ''}${days >= 3 ? ' streak--hot' : ''}` },
     icon('flame', 20),
     h(
       'div',

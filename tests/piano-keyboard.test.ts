@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { keyDefName, midiToKeyDef, pianoKeyDefs } from '../src/ui/components/piano-keyboard';
+import {
+  KEY_GEOMETRY,
+  keyDefName,
+  keyHitRect,
+  midiToKeyDef,
+  pianoKeyDefs,
+  viewportKeyDefs,
+} from '../src/ui/components/piano-keyboard';
 
 /** 与 audio/melody-synth.ts 的 noteToMidi 一致（C4=60） */
 const LETTER_SEMI: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
@@ -52,5 +59,67 @@ describe('pianoKeyDefs（纯函数，可单测）', () => {
     expect(defs.filter((d) => !d.isBlack)).toHaveLength(21);
     expect(defs.filter((d) => d.isBlack)).toHaveLength(15);
     expect(defs[35].midi).toBe(83);
+  });
+});
+
+describe('触控几何 KEY_GEOMETRY / keyHitRect（1.5 八度视窗）', () => {
+  it('视窗 1.5 八度：10 白键 7 黑键共 17 键（C 起 C–E）', () => {
+    const defs = viewportKeyDefs(48);
+    expect(defs).toHaveLength(KEY_GEOMETRY.VIEW_KEYS);
+    expect(defs).toHaveLength(17);
+    expect(defs.filter((d) => !d.isBlack)).toHaveLength(KEY_GEOMETRY.VIEW_WHITE);
+    expect(defs.filter((d) => !d.isBlack)).toHaveLength(10);
+    expect(defs.filter((d) => d.isBlack)).toHaveLength(KEY_GEOMETRY.VIEW_BLACK);
+    expect(defs.filter((d) => d.isBlack)).toHaveLength(7);
+    expect(defs[0]).toMatchObject({ midi: 48, letter: 'C', isBlack: false });
+    expect(defs[16]).toMatchObject({ midi: 64, letter: 'E', isBlack: false });
+    expect(KEY_GEOMETRY.VIEW_W).toBe(KEY_GEOMETRY.VIEW_WHITE * KEY_GEOMETRY.WHITE_W);
+  });
+
+  it('白键宽 36 单位：360px 屏宽时每白键 36 CSS px（≥ 30 触控达标）', () => {
+    expect(KEY_GEOMETRY.WHITE_W).toBe(36);
+    expect(KEY_GEOMETRY.WHITE_H).toBe(110);
+    expect(KEY_GEOMETRY.VIEW_H).toBe(130);
+    expect(KEY_GEOMETRY.VIEW_W).toBe(360);
+    const screenPx = 360;
+    const cssPerUnit = screenPx / KEY_GEOMETRY.VIEW_W;
+    expect(KEY_GEOMETRY.WHITE_W * cssPerUnit).toBeGreaterThanOrEqual(30);
+    // 黑键 ≈20 CSS px（375px 屏上白键 ≈32px），热区更宽
+    expect(KEY_GEOMETRY.BLACK_W).toBe(22);
+    expect(KEY_GEOMETRY.BLACK_H).toBe(68);
+  });
+
+  it('黑键热区左右 +6 / 下方 +12，覆盖白键缝隙', () => {
+    const hit = keyHitRect(49, 48); // C♯3：贴 C3|D3 缝隙
+    expect(hit.isBlack).toBe(true);
+    expect(hit.width).toBe(KEY_GEOMETRY.BLACK_W + 2 * KEY_GEOMETRY.HIT_PAD_X);
+    expect(hit.height).toBe(KEY_GEOMETRY.BLACK_H + KEY_GEOMETRY.HIT_PAD_BOTTOM);
+    // 热区宽于键面并跨过白键接缝
+    expect(hit.width).toBeGreaterThan(KEY_GEOMETRY.BLACK_W);
+    const seam = KEY_GEOMETRY.WHITE_W; // C3 白键右缘
+    expect(hit.x).toBeLessThan(seam);
+    expect(hit.x + hit.width).toBeGreaterThan(seam);
+    // 白键热区即键面
+    const white = keyHitRect(48, 48);
+    expect(white.isBlack).toBe(false);
+    expect(white).toMatchObject({ x: 0, width: KEY_GEOMETRY.WHITE_W, height: KEY_GEOMETRY.WHITE_H });
+  });
+
+  it('黑键 hit 矩形与相邻白键重叠 ≥ 4 单位（命中优先可测）', () => {
+    const defs = viewportKeyDefs(48);
+    const whites = defs.filter((d) => !d.isBlack);
+    const overlap = (a: { x: number; width: number }, b: { x: number; width: number }): number =>
+      Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+    for (const black of defs.filter((d) => d.isBlack)) {
+      const hit = keyHitRect(black.midi, 48);
+      const left = [...whites].reverse().find((w) => w.midi < black.midi);
+      const right = whites.find((w) => w.midi > black.midi);
+      expect(left, `黑键 ${black.midi} 左邻白键`).toBeDefined();
+      expect(right, `黑键 ${black.midi} 右邻白键`).toBeDefined();
+      const l = keyHitRect(left!.midi, 48);
+      const r = keyHitRect(right!.midi, 48);
+      expect(overlap(hit, l)).toBeGreaterThanOrEqual(4);
+      expect(overlap(hit, r)).toBeGreaterThanOrEqual(4);
+    }
   });
 });
