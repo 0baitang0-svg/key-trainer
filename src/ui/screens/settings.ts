@@ -1,10 +1,11 @@
 /**
- * 设置页：音量 / 静音、大字模式、导出导入 JSON、重置数据（二次确认）。
+ * 设置页：音量 / 静音、大字模式、提示卡、导出导入 JSON、重置数据（二次确认）。
  */
 
 import { createInitialState, exportJSON, importJSON } from '../../core/store';
 import { setMuted, setVolume } from '../../audio/sfx';
 import { h, icon } from '../dom';
+import { showToast } from '../components/toast';
 import type { AppContext, ScreenInstance } from '../router';
 
 function row(title: string, note: string, control: HTMLElement): HTMLElement {
@@ -30,6 +31,42 @@ function toggle(on: boolean, onChange: (v: boolean) => void): HTMLElement {
     },
   }, h('span', { className: 'toggle__knob' }));
   return btn;
+}
+
+/** armed 二次确认按钮（4 秒超时还原），返回按钮元素与取消计时方法 */
+function armedButton(
+  label: string,
+  confirmLabel: string,
+  onConfirm: () => void,
+): { root: HTMLElement; cancelArm(): void } {
+  let armed = false;
+  let armTimer = 0;
+  const btn = h('button', {
+    className: 'btn btn--danger btn--wide',
+    text: label,
+    attrs: { type: 'button' },
+    on: {
+      click: () => {
+        if (!armed) {
+          armed = true;
+          btn.textContent = confirmLabel;
+          btn.classList.add('is-armed');
+          armTimer = window.setTimeout(() => {
+            armed = false;
+            btn.textContent = label;
+            btn.classList.remove('is-armed');
+          }, 4000);
+          return;
+        }
+        window.clearTimeout(armTimer);
+        armed = false;
+        btn.textContent = label;
+        btn.classList.remove('is-armed');
+        onConfirm();
+      },
+    },
+  });
+  return { root: btn, cancelArm: () => window.clearTimeout(armTimer) };
 }
 
 export function settingsScreen(ctx: AppContext): ScreenInstance {
@@ -137,35 +174,25 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
     overlay.replaceChildren(sheet);
   }
 
+  /* ---------- 提示卡 ---------- */
+
+  const ruleCardToggle = toggle(state.config.showRuleCards, (on) => {
+    ctx.update((s) => ({ ...s, config: { ...s.config, showRuleCards: on } }));
+  });
+
+  const resetCardsBtn = armedButton('重置微课卡记录', '再点一次确认清空', () => {
+    ctx.update((s) => ({ ...s, seenKeys: [] }));
+    showToast('已清空，下次训练会重新弹卡');
+  });
+
   /* ---------- 重置（二次确认） ---------- */
 
-  let armed = false;
-  let armTimer = 0;
-  const resetBtn = h('button', {
-    className: 'btn btn--danger btn--wide',
-    text: '重置数据',
-    attrs: { type: 'button' },
-    on: {
-      click: () => {
-        if (!armed) {
-          armed = true;
-          resetBtn.textContent = '再点一次确认清空';
-          resetBtn.classList.add('is-armed');
-          armTimer = window.setTimeout(() => {
-            armed = false;
-            resetBtn.textContent = '重置数据';
-            resetBtn.classList.remove('is-armed');
-          }, 4000);
-          return;
-        }
-        window.clearTimeout(armTimer);
-        ctx.update(() => createInitialState());
-        applyFontClass(false);
-        setVolume(0.8);
-        setMuted(false);
-        ctx.reset({ name: 'home' });
-      },
-    },
+  const resetBtn = armedButton('重置数据', '再点一次确认清空', () => {
+    ctx.update(() => createInitialState());
+    applyFontClass(false);
+    setVolume(0.8);
+    setMuted(false);
+    ctx.reset({ name: 'home' });
   });
 
   body.append(
@@ -185,6 +212,14 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
     h(
       'section',
       { className: 'card' },
+      h('h2', { className: 'card__title', text: '提示卡' }),
+      row('首遇微课卡', '关闭后不再弹任何微课卡', ruleCardToggle),
+      resetCardsBtn.root,
+      h('p', { className: 'card__note', text: '只清空「已看过」记录，不影响训练数据。' }),
+    ),
+    h(
+      'section',
+      { className: 'card' },
       h('h2', { className: 'card__title', text: '数据' }),
       h('button', {
         className: 'btn btn--ghost btn--wide',
@@ -194,7 +229,7 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
       }),
       h('p', { className: 'card__note', text: '数据保存在本机；导出可迁移或备份。' }),
     ),
-    h('section', { className: 'card' }, resetBtn),
+    h('section', { className: 'card' }, resetBtn.root),
   );
 
   const root = h(
@@ -217,7 +252,8 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
   return {
     root,
     destroy(): void {
-      window.clearTimeout(armTimer);
+      resetBtn.cancelArm();
+      resetCardsBtn.cancelArm();
     },
   };
 }

@@ -605,6 +605,10 @@ svg.staff {
   grid-template-columns: repeat(3, 1fr);
 }
 
+.answer-pad--grid4 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 .answer-pad--row3 {
   grid-template-columns: repeat(3, 1fr);
 }
@@ -1478,6 +1482,55 @@ svg.wk {
   min-height: 44px;
   padding-inline: 12px;
   font-size: calc(13px * var(--fs));
+}
+
+/* ---------- 钢琴键盘 / 拼和弦 ---------- */
+
+svg.piano {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.piano .pk {
+  cursor: pointer;
+}
+
+.piano.is-disabled .pk {
+  cursor: default;
+  pointer-events: none;
+}
+
+.piano .pk__label {
+  pointer-events: none;
+  user-select: none;
+}
+
+.chord-input {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chord-input__notes {
+  min-height: 24px;
+  font-family: var(--serif);
+  font-size: calc(15px * var(--fs));
+  letter-spacing: 0.06em;
+  text-align: center;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.chord-input__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.chord-input__actions .btn {
+  flex: 1;
 }
 
 /* ---------- 动效降级 ---------- */

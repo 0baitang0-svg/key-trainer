@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   EMA_ALPHA,
+  TRAIN_MODES,
   aggregate,
   applyAttempt,
   applyAttempts,
@@ -14,6 +15,7 @@ import {
   type AttemptRecord,
   type StatsState,
 } from '../src/core/stats';
+import { chordItemExtra } from '../src/core/question-generator';
 import {
   createInitialState,
   exportJSON,
@@ -115,6 +117,46 @@ describe('聚合报表', () => {
     expect(flBar.accuracy).toBeCloseTo(0.5);
     expect(buildStats(records).records).toHaveLength(5);
   });
+
+  it('modeBars 七模式全覆盖聚合，keyBars 不吃和弦新题', () => {
+    const chordKeys = [
+      itemKey('func', 'sh', 1, 'treble', 'maj', chordItemExtra('dom-key')),
+      itemKey('func', 'sh', 1, 'treble', 'maj', chordItemExtra('key-dom', 'maj')),
+      itemKey('diatonic', 'sh', 0, 'treble', 'maj', chordItemExtra('deg2chord', 'maj')),
+      itemKey('diatonic', 'sh', 0, 'treble', 'maj', chordItemExtra('chord2deg', 'harmMin')),
+      itemKey('degrees', 'fl', 2, 'treble', 'min', chordItemExtra('acc2key', 'melMin')),
+      itemKey('build', 'sh', 1, 'treble', 'maj', chordItemExtra('build-notes')),
+    ];
+    expect(chordKeys[5].endsWith('|build-notes')).toBe(true);
+    const mixed: AttemptRecord[] = [
+      rec(true, 1000, NOW),
+      rec(true, 1100, NOW, chordKeys[0]),
+      rec(false, 1200, NOW, chordKeys[1]),
+      rec(true, 1300, NOW, chordKeys[2]),
+      rec(true, 1400, NOW, chordKeys[2]),
+      rec(false, 1500, NOW, chordKeys[3]),
+      rec(true, 1600, NOW, chordKeys[4]),
+      rec(true, 1700, NOW, chordKeys[5]),
+    ];
+    const agg = aggregate(mixed, NOW);
+
+    // modeBars：固定 7 行、按 TRAIN_MODES 顺序，count / correct / accuracy 聚合
+    expect(agg.modeBars.map((m) => m.train)).toEqual([...TRAIN_MODES]);
+    const bar = (train: string) => agg.modeBars.find((m) => m.train === train)!;
+    expect(bar('sig')).toEqual({ train: 'sig', count: 1, correct: 1, accuracy: 1 });
+    expect(bar('func')).toEqual({ train: 'func', count: 2, correct: 1, accuracy: 0.5 });
+    expect(bar('diatonic')).toEqual({ train: 'diatonic', count: 3, correct: 2, accuracy: 2 / 3 });
+    expect(bar('degrees')).toEqual({ train: 'degrees', count: 1, correct: 1, accuracy: 1 });
+    expect(bar('build')).toEqual({ train: 'build', count: 1, correct: 1, accuracy: 1 });
+    expect(bar('note')).toEqual({ train: 'note', count: 0, correct: 0, accuracy: 0 });
+    expect(bar('piece')).toEqual({ train: 'piece', count: 0, correct: 0, accuracy: 0 });
+
+    // keyBars：只统计 sig/note/piece 旧键，和弦题不混入
+    expect(agg.keyBars.map((b) => [b.type, b.n])).toEqual([['sh', 3]]);
+    const onlyChord = aggregate(mixed.filter((r) => chordKeys.includes(r.key)), NOW);
+    expect(onlyChord.keyBars).toEqual([]);
+    expect(onlyChord.modeBars.reduce((a, m) => a + m.count, 0)).toBe(7);
+  });
 });
 
 describe('v1 → v2 迁移与导入导出', () => {
@@ -147,6 +189,7 @@ describe('v1 → v2 迁移与导入导出', () => {
       sound: true,
       volume: 0.55,
       bigFont: true,
+      showRuleCards: true,
     });
     const item = s.stats.items['sig|sh|3|bass|min'];
     expect(item).toMatchObject({
@@ -236,5 +279,28 @@ describe('经验 / 打卡 / 微课卡', () => {
     s = markSeen(s, 'rc|sh|1|maj');
     const s2 = markSeen(s, 'rc|sh|1|maj');
     expect(s2.seenKeys).toEqual(['rc|sh|1|maj']);
+  });
+});
+
+describe('微课卡开关配置（showRuleCards）', () => {
+  it('默认开启', () => {
+    expect(createInitialState().config.showRuleCards).toBe(true);
+    expect(migrate({}).config.showRuleCards).toBe(true);
+  });
+
+  it('旧 JSON（无该字段）导入后字段补齐为 true，不升 schemaVersion', () => {
+    const legacy = JSON.stringify({
+      cfg: { clef: 'bass', ask: 'minor', sound: 'on', vol: 55, big: true },
+      seenKeys: ['rc|sh|1|maj'],
+    });
+    const s = migrate(legacy);
+    expect(s.config).toHaveProperty('showRuleCards', true);
+    expect(s.schemaVersion).toBe(SCHEMA_VERSION);
+  });
+
+  it('显式关闭保留，导出导入往返一致', () => {
+    const s = migrate({ config: { showRuleCards: false }, seenKeys: ['rc|sh|1|maj'] });
+    expect(s.config.showRuleCards).toBe(false);
+    expect(importJSON(exportJSON(s)).config.showRuleCards).toBe(false);
   });
 });

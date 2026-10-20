@@ -11,18 +11,22 @@ import { FL_ORDER, MAJ_GRID, MIN_GRID, SH_ORDER, noteInfo } from '../core/music-
 import {
   buildOptions,
   checkAnswer,
+  chordItemExtra,
   correctLabelOf,
   explainAnswer,
   makeRng,
   pickQuestion,
   questionKey,
+  CHORD_TRAIN_KINDS,
   type PickConfig,
+  type QKind,
   type Question,
   type TrainMode,
 } from '../core/question-generator';
 import { applyAttempt, aggregate, itemKey, median, type AttemptRecord } from '../core/stats';
 import { dueItems, enqueueWrong, markAnswer } from '../core/scheduler';
 import {
+  CHORD_MIX_WEIGHTS,
   LEVELS,
   buildDailyPlan,
   checkPass,
@@ -129,12 +133,16 @@ function timedBlock(
   };
 }
 
-/** 每日训练计划（热身 → 主节 → 曲目关卡 → 可选冲刺） */
+/** 每日训练计划（热身 → 主节 → 曲目关卡 → 可选和弦块 → 可选冲刺） */
 export function planFromDaily(state: AppState): SessionPlan {
   const agg = aggregate(state.stats.records);
   const plan = buildDailyPlan(
     { train: state.config.train === 'piece' ? 'piece' : state.config.train },
-    { totalAttempts: agg.totalAttempts, accuracy: agg.accuracy },
+    {
+      totalAttempts: agg.totalAttempts,
+      accuracy: agg.accuracy,
+      passedLevelIds: state.levelProgress.passed,
+    },
   );
   const clefs: Clef[] = [state.config.clef];
   const asks: Ask[] = [state.config.ask];
@@ -155,11 +163,30 @@ export function planFromDaily(state: AppState): SessionPlan {
       blocks.push(timedBlock('main', '主节', { train: mainTrain, clefs, asks }, b.minutes, b.focus));
     } else if (b.kind === 'level') {
       blocks.push(levelBlock(resolveDailyLevel(state, b.levelId)));
+    } else if (b.kind === 'chord') {
+      blocks.push(chordMixBlock(b.minutes, b.focus));
     } else {
       blocks.push(timedBlock('sprint', '冲刺', { train: mainTrain, clefs, asks: ['maj', 'min'] }, b.minutes, b.focus));
     }
   }
   return { mode: 'daily', title: '今日训练', blocks };
+}
+
+/** 和弦混编块：func:diatonic:degrees:build = 3:3:2:2（每 train 3 个题型，题型权重取 train 权重） */
+export function chordMixBlock(minutes: number, focus?: string): SessionBlock {
+  const kinds: QKind[] = Object.values(CHORD_TRAIN_KINDS).flat();
+  const kindWeights: Partial<Record<QKind, number>> = {};
+  for (const train of Object.keys(CHORD_TRAIN_KINDS) as Array<keyof typeof CHORD_TRAIN_KINDS>) {
+    for (const k of CHORD_TRAIN_KINDS[train]) kindWeights[k] = CHORD_MIX_WEIGHTS[train];
+  }
+  return {
+    kind: 'chord',
+    title: '和弦块',
+    focus,
+    pick: { train: 'func', clefs: ['treble', 'bass'], asks: ['maj'], kinds, kindWeights },
+    questionCount: Math.max(4, Math.round(minutes * QUESTIONS_PER_MINUTE)),
+    durationMs: minutes * 60_000,
+  };
 }
 
 /** 日计划里的曲目关卡：优先未通关的曲目关 */
@@ -178,11 +205,23 @@ function resolveDailyLevel(state: AppState, levelId?: string): Level {
 
 /** 自由练习配置 */
 export interface FreeConfig {
-  train: 'sig' | 'note' | 'mix';
+  /** 训练模式（sig / note / func / diatonic / degrees / build，mix = 认调 + 认音交替） */
+  train: TrainMode | 'mix';
   clef: Clef | 'mix';
   ask: Ask | 'mix';
   minutes: number;
 }
+
+/** 各训练模式的自由练习标题与一句话焦点 */
+const FREE_META: Record<TrainMode, { title: string; focus: string }> = {
+  sig: { title: '自由练习 · 认调', focus: '看调号，直读主音' },
+  note: { title: '自由练习 · 认音', focus: '看谱面音位，判断调号带来的升降' },
+  piece: { title: '自由练习 · 曲目认调', focus: '跟着名曲认调号' },
+  func: { title: '自由练习 · 和弦归属', focus: '看属七，直读它归属的调' },
+  diatonic: { title: '自由练习 · 顺阶和弦', focus: '级数 ↔ 顺阶和弦 ↔ 功能' },
+  degrees: { title: '自由练习 · 键盘音级', focus: '调内变化音与级数音名' },
+  build: { title: '自由练习 · 和弦构建', focus: '按音程公式拼出和弦' },
+};
 
 /** 自由练习计划（混合题型按分钟交替出认调 / 认音块） */
 export function planFromFree(cfg: FreeConfig): SessionPlan {
@@ -192,10 +231,11 @@ export function planFromFree(cfg: FreeConfig): SessionPlan {
   const trains: TrainMode[] = cfg.train === 'mix' ? ['sig', 'note'] : [cfg.train];
   for (let i = 0; i < cfg.minutes; i++) {
     const train = trains[i % trains.length];
+    const meta = FREE_META[train];
     blocks.push({
       kind: 'free',
-      title: train === 'note' ? '自由练习 · 认音' : '自由练习 · 认调',
-      focus: train === 'note' ? '看谱面音位，判断调号带来的升降' : '看调号，直读主音',
+      title: meta.title,
+      focus: meta.focus,
       pick: {
         train,
         clefs,
@@ -243,6 +283,7 @@ export function planFromLevel(level: Level): SessionPlan {
  * - 认音：看该音名在调号里的那一个
  */
 export function anchorAccent(q: Question): number | undefined {
+  if (q.cq !== undefined) return undefined;
   if (q.n === 0) return undefined;
   if (q.train === 'note') {
     const info = noteInfo(q.step ?? 0, q.type, q.n, q.clef);
@@ -257,10 +298,12 @@ export function anchorAccent(q: Question): number | undefined {
 
 /**
  * 生成作答展示选项：
+ * - 和弦题：核心层已给出 4 选（或功能 3 选），原样展示
  * - 认音：固定「♮原位 / ♯升 / ♭降」3 项
  * - 认调：核心层 4 项（正确 + 3 易混）再补 2 个随机干扰，凑成 2×3 六宫格
  */
 export function displayOptions(q: Question): string[] {
+  if (q.cq !== undefined) return [...q.options];
   const base = buildOptions(q);
   if (q.train === 'note') return base;
   const grid = q.ask === 'maj' ? MAJ_GRID : MIN_GRID;
@@ -275,6 +318,15 @@ function shuffle<T>(arr: readonly T[]): T[] {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+/** midi → 音名（记录展示用，键盘拼和弦的作答转成音名串） */
+const PC_NAME = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+
+/** 作答内容 → 记录用文案 */
+function pickedLabelOf(answer: string | readonly number[]): string | null {
+  if (typeof answer === 'string') return answer;
+  return answer.map((m) => PC_NAME[((m % 12) + 12) % 12]).join(' ');
 }
 
 /* ---------- 会话状态机 ---------- */
@@ -370,14 +422,24 @@ export class SessionController {
     return pickQuestion(block.pick, state.stats, this.recent, reviewDue, { rng: this.rng, now });
   }
 
-  /** 作答：判题 + 入统计 / 错题队列 + 加经验 */
-  submit(label: string): { ok: boolean; correctLabel: string; explain: string; reactionMs: number } {
+  /**
+   * 作答：判题 + 入统计 / 错题队列 + 加经验。
+   * @param answer 选项文案 / 选项下标（number[] 时为键盘拼和弦选中的 midi）
+   */
+  submit(answer: string | readonly number[]): { ok: boolean; correctLabel: string; explain: string; reactionMs: number } {
     const question = this.recent[this.recent.length - 1];
     const reactionMs = Date.now() - this.questionStart;
-    const res = checkAnswer(question, label);
+    const res = checkAnswer(question, answer);
     const now = Date.now();
     const rec: AttemptRecord = {
-      key: itemKey(question.train, question.type, question.n, question.clef, question.ask),
+      key: itemKey(
+        question.train,
+        question.type,
+        question.n,
+        question.clef,
+        question.ask,
+        question.cq ? chordItemExtra(question.cq.kind, question.cq.scale) : '',
+      ),
       ok: res.ok,
       reactionMs,
       at: now,
@@ -398,7 +460,7 @@ export class SessionController {
       this.combo = 0;
       this.xpEarned += XP_WRONG;
     }
-    this.pushRecord(question, res.ok, label, res.correctLabel, res.explain, reactionMs, false);
+    this.pushRecord(question, res.ok, pickedLabelOf(answer), res.correctLabel, res.explain, reactionMs, false);
     return { ...res, reactionMs };
   }
 

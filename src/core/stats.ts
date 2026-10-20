@@ -50,9 +50,10 @@ export interface StatsState {
   records: AttemptRecord[];
 }
 
-/** 条目 key：train|type|n|clef|ask */
-export function itemKey(train: TrainMode, type: SigType, n: number, clef: Clef, ask: Ask): string {
-  return `${train}|${type}|${n}|${clef}|${ask}`;
+/** 条目 key：train|type|n|clef|ask（和弦题用 extra 追加第 6 段 qkind） */
+export function itemKey(train: TrainMode, type: SigType, n: number, clef: Clef, ask: Ask, extra = ''): string {
+  const base = `${train}|${type}|${n}|${clef}|${ask}`;
+  return extra === '' ? base : `${base}|${extra}`;
 }
 
 export function emptyItemStat(): ItemStat {
@@ -165,6 +166,20 @@ export interface KeyBar {
   accuracy: number | null;
 }
 
+/** 按训练模式分组的条形数据（统计页「模式表现」，7 种模式全覆盖） */
+export interface ModeBar {
+  train: string;
+  count: number;
+  correct: number;
+  accuracy: number;
+}
+
+/** 全部训练模式（modeBars 固定顺序） */
+export const TRAIN_MODES: readonly TrainMode[] = ['sig', 'note', 'piece', 'func', 'diatonic', 'degrees', 'build'];
+
+/** keyBars 只统计旧键训练（和弦题不按调号分组，防止污染旧键条形） */
+const KEY_BAR_TRAINS: ReadonlySet<string> = new Set<string>(['sig', 'note', 'piece']);
+
 export interface Aggregates {
   totalAttempts: number;
   totalCorrect: number;
@@ -180,8 +195,10 @@ export interface Aggregates {
   bestStreak: number;
   /** 最近 7 日每日题数与正确率（升序，含今天） */
   daily: DailySeries[];
-  /** 按调号分组条形数据（升号在前、降号在后，n 升序） */
+  /** 按调号分组条形数据（升号在前、降号在后，n 升序；只含 sig/note/piece） */
   keyBars: KeyBar[];
+  /** 按训练模式分组条形数据（7 种模式全量，按 TRAIN_MODES 顺序） */
+  modeBars: ModeBar[];
 }
 
 /** 时间戳 → 本地 YYYY-MM-DD */
@@ -209,6 +226,7 @@ export function aggregate(records: ReadonlyArray<AttemptRecord>, now: number = D
   const allReactions: number[] = [];
   const byDay = new Map<string, { count: number; correct: number }>();
   const byKey = new Map<string, { type: SigType; n: number; count: number; correct: number }>();
+  const byMode = new Map<string, { count: number; correct: number }>();
 
   for (const r of records) {
     if (r.ok) {
@@ -228,13 +246,21 @@ export function aggregate(records: ReadonlyArray<AttemptRecord>, now: number = D
     byDay.set(day, d);
 
     const parts = r.key.split('|');
-    const type = (parts[1] === 'fl' ? 'fl' : 'sh') as SigType;
-    const n = Number(parts[2]) || 0;
-    const kk = `${type}|${n}`;
-    const k = byKey.get(kk) ?? { type, n, count: 0, correct: 0 };
-    k.count++;
-    k.correct += r.ok ? 1 : 0;
-    byKey.set(kk, k);
+    const train = parts[0];
+    const m = byMode.get(train) ?? { count: 0, correct: 0 };
+    m.count++;
+    m.correct += r.ok ? 1 : 0;
+    byMode.set(train, m);
+
+    if (KEY_BAR_TRAINS.has(train)) {
+      const type = (parts[1] === 'fl' ? 'fl' : 'sh') as SigType;
+      const n = Number(parts[2]) || 0;
+      const kk = `${type}|${n}`;
+      const k = byKey.get(kk) ?? { type, n, count: 0, correct: 0 };
+      k.count++;
+      k.correct += r.ok ? 1 : 0;
+      byKey.set(kk, k);
+    }
   }
 
   // 最近 7 日（含今天），升序
@@ -250,6 +276,11 @@ export function aggregate(records: ReadonlyArray<AttemptRecord>, now: number = D
     return a.n - b.n;
   }).map((k) => ({ ...k, accuracy: ratio(k.correct, k.count) }));
 
+  const modeBars: ModeBar[] = TRAIN_MODES.map((train) => {
+    const m = byMode.get(train) ?? { count: 0, correct: 0 };
+    return { train, count: m.count, correct: m.correct, accuracy: ratio(m.correct, m.count) ?? 0 };
+  });
+
   return {
     totalAttempts: records.length,
     totalCorrect: correct,
@@ -260,5 +291,6 @@ export function aggregate(records: ReadonlyArray<AttemptRecord>, now: number = D
     bestStreak,
     daily,
     keyBars,
+    modeBars,
   };
 }

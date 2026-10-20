@@ -19,6 +19,12 @@ export const STAFF_VIEWBOX = '0 0 640 170';
 /** 朱红 accent（直读锚点高亮描边） */
 export const ACCENT_STROKE = '#B5402D';
 
+/** 和弦堆叠里的单个音符头（step 同单音语义：0=第1线，超出范围自动加线） */
+export interface StaffNote {
+  step: number;
+  acc?: -2 | -1 | 0 | 1 | 2;
+}
+
 export interface StaffOptions {
   clef: Clef;
   type: SigType;
@@ -28,6 +34,10 @@ export interface StaffOptions {
   step?: number;
   /** 高亮第 k 个升降号（0 起索引），直读锚点动画用，加朱红描边 */
   accent?: number;
+  /** 和弦堆叠音符（同一 x 多符头，三/四音）；与 step 并存时 notes 优先 */
+  notes?: StaffNote[];
+  /** 和弦号文本（如 'G7'），<text> 画在谱面上方 */
+  chordSymbolText?: string;
 }
 
 /**
@@ -69,7 +79,7 @@ function ledgerLine(cx: number, y: number): string {
  * - 可选目标音符（符头旋转椭圆 + 符干 + 加线）
  */
 export function buildStaff(opts: StaffOptions): string {
-  const { clef, type, n, step, accent } = opts;
+  const { clef, type, n, step, accent, notes, chordSymbolText } = opts;
   if (!Number.isInteger(n) || n < 0 || n > 7) {
     throw new RangeError(`n 必须是 0..7 的整数，收到 ${n}`);
   }
@@ -120,7 +130,43 @@ export function buildStaff(opts: StaffOptions): string {
     }
   }
 
-  if (step != null) {
+  if (notes && notes.length > 0) {
+    // 和弦堆叠：同一 x 多符头，二度（step 差 1）时后一个符头右移 9px 兜底
+    const half = S / 2;
+    const cx = 350;
+    const placed: Array<{ step: number; acc: number; x: number; y: number }> = [];
+    for (const nt of notes) {
+      let x = cx;
+      for (const p of placed) {
+        if (Math.abs(p.step - nt.step) === 1) x = Math.max(x, p.x + 9);
+      }
+      placed.push({ step: nt.step, acc: nt.acc ?? 0, x, y: bottom - nt.step * half });
+    }
+    // 加线：偶数 step 在谱外时补短横线（step ≤ -2 或 ≥ 10）
+    for (const p of placed) {
+      for (let e = -2; e >= p.step; e -= 2) s += ledgerLine(p.x, bottom - e * half);
+      for (let e = 10; e <= p.step; e += 2) s += ledgerLine(p.x, bottom - e * half);
+    }
+    // 临时记号：符头左侧，acc=±2 画两个并排（间距 0.7*S），acc=0 不画
+    const u = S / 250;
+    for (const p of placed) {
+      if (p.acc === 0) continue;
+      const gname: GlyphName = p.acc > 0 ? 'accidentalSharp' : 'accidentalFlat';
+      const count = Math.abs(p.acc) >= 2 ? 2 : 1;
+      for (let k = 0; k < count; k++) {
+        const gap = count === 2 ? (k === 0 ? -0.35 * S : 0.35 * S) : 0;
+        const off = -GLYPHS[gname].adv * u * 0.5;
+        s += glyphSVG(gname, p.x - 16 + gap + off, p.y, S, 'var(--ink)', undefined, 'note-acc');
+      }
+    }
+    for (const p of placed) {
+      s += '<ellipse class="notehead" cx="' + p.x + '" cy="' + p.y + '" rx="7.6" ry="5.4" transform="rotate(-16 ' + p.x + ' ' + p.y + ')" fill="var(--ink)"/>';
+    }
+    // 单符干：从最低音符头出发（最低音 step<4 向上长 44，否则反向向下）
+    const lowest = placed.reduce((a, b) => (b.y > a.y ? b : a));
+    if (lowest.step < 4) s += '<rect class="stem" x="' + (lowest.x + 6.9) + '" y="' + (lowest.y - 43) + '" width="1.7" height="44" fill="var(--ink)"/>';
+    else s += '<rect class="stem" x="' + (lowest.x - 8.6) + '" y="' + (lowest.y - 1) + '" width="1.7" height="44" fill="var(--ink)"/>';
+  } else if (step != null) {
     const y = bottom - step * (S / 2);
     const cx = 350;
     // 加线：偶数 step 在谱外时补短横线（step ≤ -2 或 ≥ 10）
@@ -131,5 +177,16 @@ export function buildStaff(opts: StaffOptions): string {
     else s += '<rect class="stem" x="' + (cx - 8.6) + '" y="' + (y - 1) + '" width="1.7" height="44" fill="var(--ink)"/>';
   }
 
+  if (chordSymbolText) {
+    // 和弦号：谱面左上、第 5 线上方约 18 单位，serif 字体
+    s += '<text class="chord-symbol" x="' + (x0 + 2) + '" y="' + (bottom - 4 * S - 18) +
+      '" font-family="var(--serif)" font-size="20" fill="var(--ink)">' + escapeXML(chordSymbolText) + '</text>';
+  }
+
   return s;
+}
+
+/** XML 文本转义（和弦号等小文本用） */
+function escapeXML(t: string): string {
+  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

@@ -143,3 +143,80 @@ describe('谱号 / 目标音符 / 加线', () => {
     expect(STAFF_BOTTOM).toBe(120);
   });
 });
+
+describe('和弦堆叠渲染（notes / chordSymbolText）', () => {
+  /** 提取所有符头的 cx / cy */
+  function noteheads(svg: string): Array<{ cx: number; cy: number }> {
+    const out: Array<{ cx: number; cy: number }> = [];
+    const re = /<ellipse class="notehead" cx="([\d.]+)" cy="([\d.]+)"/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(svg)) !== null) out.push({ cx: parseFloat(m[1]), cy: parseFloat(m[2]) });
+    return out;
+  }
+
+  /** 符头左侧的临时记号个数（acc=±2 画两个并排） */
+  function noteAccCount(svg: string): number {
+    return (svg.match(/<g class="note-acc/g) ?? []).length;
+  }
+
+  it('和弦堆叠：每个符头 cy = bottom - step*(S/2) 逐音正确', () => {
+    const svg = buildStaff({
+      clef: 'treble',
+      type: 'sh',
+      n: 0,
+      notes: [{ step: 0 }, { step: 2 }, { step: 4 }, { step: 6 }],
+    });
+    const heads = noteheads(svg);
+    expect(heads).toHaveLength(4);
+    heads.forEach((hd, i) => {
+      expect(hd.cy).toBe(STAFF_BOTTOM - [0, 2, 4, 6][i] * (STAFF_S / 2));
+      expect(hd.cx).toBe(350); // 三度叠置同 x 对齐
+    });
+    expect(heads.map((hd) => hd.cy)).toEqual([120, 108, 96, 84]);
+    // 单符干
+    expect(svg.match(/<rect class="stem"/g)).toHaveLength(1);
+  });
+
+  it('二度错位：相邻 step 差 1 时后一个符头 x 偏移 9px', () => {
+    const seconds = buildStaff({ clef: 'treble', type: 'sh', n: 0, notes: [{ step: 0 }, { step: 1 }] });
+    const a = noteheads(seconds);
+    expect(a.map((hd) => hd.cx)).toEqual([350, 359]);
+    const thirds = buildStaff({ clef: 'treble', type: 'sh', n: 0, notes: [{ step: 0 }, { step: 2 }] });
+    expect(noteheads(thirds).map((hd) => hd.cx)).toEqual([350, 350]);
+  });
+
+  it('临时记号数量：acc=±1 各 1 个、acc=±2（双升/双降）各 2 个、acc=0 不画', () => {
+    const svg = buildStaff({
+      clef: 'treble',
+      type: 'sh',
+      n: 0,
+      notes: [
+        { step: 0, acc: 1 },
+        { step: 2, acc: -1 },
+        { step: 4, acc: 2 },
+        { step: 6, acc: -2 },
+      ],
+    });
+    expect(noteAccCount(svg)).toBe(1 + 1 + 2 + 2);
+    const plain = buildStaff({ clef: 'treble', type: 'sh', n: 0, notes: [{ step: 0, acc: 0 }, { step: 2 }] });
+    expect(noteAccCount(plain)).toBe(0);
+  });
+
+  it('chordSymbolText：谱面左上 <text>，第 5 线上方约 18 单位，serif 字体', () => {
+    const svg = buildStaff({ clef: 'treble', type: 'sh', n: 0, step: 4, chordSymbolText: 'G7' });
+    expect(svg).toContain('<text class="chord-symbol"');
+    expect(svg).toContain('>G7</text>');
+    expect(svg).toContain('x="42"');
+    expect(svg).toContain('y="54"'); // 120 - 4*12 - 18
+    expect(svg).toContain('font-family="var(--serif)"');
+    expect(svg).toContain('fill="var(--ink)"');
+  });
+
+  it('notes 与单音 step 并存时 notes 优先', () => {
+    const svg = buildStaff({ clef: 'treble', type: 'sh', n: 0, step: 8, notes: [{ step: 0 }, { step: 4 }] });
+    const heads = noteheads(svg);
+    expect(heads).toHaveLength(2);
+    expect(heads.map((hd) => hd.cy)).toEqual([120, 96]);
+    expect(svg).not.toContain('cy="72"'); // step: 8 的符头不出现
+  });
+});

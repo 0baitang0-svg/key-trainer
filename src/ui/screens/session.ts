@@ -8,14 +8,26 @@
 import { h, icon } from '../dom';
 import type { AppContext, ScreenInstance } from '../router';
 import { answerPad, type AnswerPad } from '../components/answer-pad';
+import { chordInput, type ChordInput } from '../components/chord-input';
+import { pianoKeyboard, pianoKeyDefs, type KeyMark } from '../components/piano-keyboard';
 import { staffOptionsFor, staffView } from '../components/staff-view';
 import { feedbackBanner, ruleCardSheet, type FeedbackBanner } from '../components/feedback-banner';
-import { firstSeen, ruleCardId } from '../../content/rules-cards';
+import { firstSeen, firstSeenChord } from '../../content/rules-cards';
 import { findPiece } from '../../content/repertoire';
 import { markSeen } from '../../core/store';
 import { findLevel } from '../../core/levels';
-import { playCadence, playCorrect, playWrong } from '../../audio/sfx';
-import { playMelody } from '../../audio/melody-synth';
+import {
+  CHORD_INTERVALS,
+  chordPcSet,
+  chordSymbol,
+  pitchNameToString,
+  spellChord,
+  type ChordSpec,
+  type PitchName,
+} from '../../core/chord-theory';
+import { keyAlterations, keyLabel } from '../../core/scale-theory';
+import { playCadence, playChord, playCorrect, playWrong } from '../../audio/sfx';
+import { playMelody, noteToMidi } from '../../audio/melody-synth';
 import { haptic } from '../../platform/haptics';
 import {
   SessionController,
@@ -25,6 +37,7 @@ import {
   type SessionBlock,
   type SessionPlan,
 } from '../session-controller';
+import type { Question } from '../../core/question-generator';
 
 const OK_PHRASES = ['稳', '对路', '漂亮', '就是这个感觉'];
 const BAD_PHRASES = ['这个再想想', '差一点点', '不急，看锚点'];
@@ -37,6 +50,39 @@ function pickOne<T>(arr: readonly T[]): T {
 function fmtCountdown(ms: number): string {
   const s = Math.ceil(ms / 1000);
   return `${Math.floor(s / 60)}:${`${s % 60}`.padStart(2, '0')}`;
+}
+
+/* ---------- 和弦题辅助 ---------- */
+
+/** 和弦 → 齐奏 midi（根音取 4 号八度，按音程叠上去） */
+function chordMidis(spec: ChordSpec): number[] {
+  const rootMidi = noteToMidi(spec.root.letter, 4, spec.root.acc);
+  return CHORD_INTERVALS[spec.quality].map((iv) => rootMidi + iv.semi);
+}
+
+/** 音名串 → PitchName（'G♯' / 'B♭'） */
+function pitchOf(name: string): PitchName {
+  const letter = (name[0] ?? 'C').toUpperCase();
+  let acc = 0;
+  for (const ch of name.slice(1)) {
+    if (ch === '♯') acc += 1;
+    else if (ch === '♭') acc -= 1;
+    else if (ch === '𝄪') acc += 2;
+    else if (ch === '𝄫') acc -= 2;
+  }
+  return { letter, acc };
+}
+
+/** 音名串 → 键盘高亮标记（取键盘范围内第一个同 pitch class 的键） */
+function keyMarksFor(names: readonly string[]): KeyMark[] {
+  const defs = pianoKeyDefs(48, 2);
+  const marks: KeyMark[] = [];
+  for (const name of names) {
+    const pc = chordPcSet({ root: pitchOf(name), quality: 'maj' })[0];
+    const hit = defs.find((d) => ((d.midi % 12) + 12) % 12 === pc);
+    if (hit) marks.push({ midi: hit.midi, kind: 'target', label: name });
+  }
+  return marks;
 }
 
 export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance {
@@ -81,7 +127,10 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   );
 
   let pad: AnswerPad | null = null;
+  let chordIn: ChordInput | null = null;
   let feedback: FeedbackBanner | null = null;
+  /** 当前弹层的关闭动作（返回键拦截用，无弹层时为 null） */
+  let overlayCloser: (() => void) | null = null;
   let combo = 0;
   let blockRecordStart = 0;
   let lastBlock: SessionBlock | null = null;
@@ -119,15 +168,123 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
 
   function promptOf(cq: CurrentQuestion): string {
     const q = cq.question;
+    const cqq = q.cq;
+    if (cqq) {
+      const kl = cqq.tonic ? keyLabel(cqq.tonic, cqq.scale ?? 'maj') : '';
+      switch (cqq.kind) {
+        case 'dom-key':
+          return '这个属七是哪些调的属和弦？';
+        case 'key-dom':
+          return `${kl}的属七和弦是？`;
+        case 'listen-func':
+          return '听和弦，它是什么功能？';
+        case 'deg2chord':
+          return `${kl}第 ${cqq.degree} 级的顺阶和弦是？`;
+        case 'chord2deg':
+          return '这个和弦是第几级 · 什么功能？';
+        case 'chord2func':
+          return '这个和弦是什么功能？';
+        case 'key2acc':
+          return `${kl}有哪些变化音？`;
+        case 'deg2note':
+          return `${kl}第 ${cqq.degree} 级是哪个音名？`;
+        case 'acc2key':
+          return '高亮的音属于哪个调？';
+        case 'build-notes':
+        case 'build-mc':
+          return `拼出 ${cqq.chord ? chordSymbol(cqq.chord) : ''} 的组成音`;
+        case 'notes2quality':
+          return '这个和弦是什么性质？';
+      }
+    }
     if (q.train === 'note') return '这个音在该调里唱什么？';
     if (q.train === 'piece') return '听 / 看动机，它在什么调上？';
     return q.ask === 'maj' ? '大调主音是？' : '小调主音是？';
   }
 
+  /** 和弦题题面：listen-func 放播放按钮、acc2key/deg2note/build-mc 放钢琴键盘、其余谱面 */
+  function renderChordStage(q: Question): void {
+    const cqq = q.cq;
+    if (!cqq) return;
+    switch (cqq.kind) {
+      case 'listen-func': {
+        const play = (): void => {
+          try {
+            if (cqq.chord) playChord(chordMidis(cqq.chord));
+          } catch {
+            // 音频不可用时静默
+          }
+        };
+        stage.append(
+          h(
+            'div',
+            { className: 'listen-card' },
+            h('p', { className: 'listen-card__title', text: '听这个和弦' }),
+            h('p', { className: 'listen-card__meta', text: '判断它的和声功能' }),
+            h('button', {
+              className: 'btn btn--primary btn--play',
+              attrs: { type: 'button', 'aria-label': '播放和弦' },
+              html: `${icon('play', 20).outerHTML}<span>再听一次</span>`,
+              on: { click: play },
+            }),
+          ),
+        );
+        play(); // 出题时播放
+        break;
+      }
+      case 'acc2key': {
+        const names = cqq.tonic
+          ? keyAlterations(cqq.tonic, cqq.scale ?? 'maj')
+              .filter((a) => a.altered)
+              .map((a) => a.note)
+          : [];
+        const kb = pianoKeyboard({ octaves: 2, labels: 'alteration', marks: keyMarksFor(names) });
+        stage.append(h('div', { className: 'staff-card__canvas' }, kb.root));
+        break;
+      }
+      case 'deg2note': {
+        const kb = pianoKeyboard({
+          octaves: 2,
+          labels: 'degree',
+          tonic: cqq.tonic,
+          scale: cqq.scale,
+          marks: keyMarksFor(cqq.tonic ? [pitchNameToString(cqq.tonic)] : []),
+        });
+        stage.append(h('div', { className: 'staff-card__canvas' }, kb.root));
+        break;
+      }
+      case 'build-mc': {
+        const kb = pianoKeyboard({
+          octaves: 2,
+          labels: 'noteName',
+          marks: cqq.chord ? keyMarksFor([pitchNameToString(cqq.chord.root)]) : [],
+        });
+        stage.append(h('div', { className: 'staff-card__canvas' }, kb.root));
+        break;
+      }
+      case 'build-notes':
+        break; // 键盘拼和弦在作答区（chordInput）
+      default: {
+        // 谱面题：和弦题传 notes 堆叠 + chordSymbolText；notes2quality 只给组成音音名串
+        const caption =
+          cqq.kind === 'notes2quality' && cqq.chord
+            ? spellChord(cqq.chord)
+                .map(pitchNameToString)
+                .join(' ')
+            : cqq.tonic
+              ? keyLabel(cqq.tonic, cqq.scale ?? 'maj')
+              : undefined;
+        stage.append(staffView({ ...staffOptionsFor(q), caption }));
+      }
+    }
+  }
+
   function renderStage(cq: CurrentQuestion): void {
     const q = cq.question;
     stage.replaceChildren();
-    if (q.train === 'piece' && q.pieceId) {
+    if (q.cq !== undefined) {
+      renderChordStage(q);
+    } else if (q.train === 'piece' && q.pieceId) {
       const piece = findPiece(q.pieceId);
       if (piece && q.pieceKind === 'listen') {
         stage.append(
@@ -171,22 +328,25 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   function clearFeedback(): void {
     feedback?.destroy();
     feedback = null;
+    overlayCloser = null;
     overlay.replaceChildren();
   }
 
   function showFeedback(ok: boolean, phrase: string, explain: string, cq: CurrentQuestion, autoMs: number, done: () => void): void {
     clearFeedback();
+    const cont = (): void => {
+      clearFeedback();
+      done();
+    };
     feedback = feedbackBanner({
       ok,
       phrase,
       explain,
       staff: ok ? undefined : { ...staffOptionsFor(cq.question, anchorAccent(cq.question)) },
       autoMs,
-      onContinue: () => {
-        clearFeedback();
-        done();
-      },
+      onContinue: cont,
     });
+    overlayCloser = cont;
     overlay.append(feedback.root);
   }
 
@@ -197,42 +357,70 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
     renderHead(cq);
     renderStage(cq);
     pad?.destroy();
-    const options = displayOptions(cq.question);
-    pad = answerPad({
-      options,
-      layout: cq.question.train === 'note' ? 'row3' : 'grid6',
-      onPick: (label) => submitAnswer(label, cq),
-    });
-    padHost.replaceChildren(pad.root);
-    padHost.dataset.layout = cq.question.train === 'note' ? 'row3' : 'grid6';
+    pad = null;
+    chordIn?.destroy();
+    chordIn = null;
+    const q = cq.question;
+    const input = q.answerInput ?? 'options';
+    if (input === 'keyboard-build' || input === 'keyboard-tap') {
+      // 键盘作答：pad 隐藏，确认后走 submitAnswer
+      padHost.dataset.layout = input;
+      chordIn = chordInput((midis) => submitAnswer(midis, cq));
+      padHost.replaceChildren(chordIn.root);
+    } else {
+      const options = displayOptions(q);
+      const layout: 'row3' | 'grid6' | 'grid4' =
+        q.cq !== undefined ? (options.length <= 3 ? 'row3' : 'grid4') : q.train === 'note' ? 'row3' : 'grid6';
+      pad = answerPad({
+        options,
+        layout,
+        onPick: (label) => submitAnswer(label, cq),
+      });
+      padHost.replaceChildren(pad.root);
+      padHost.dataset.layout = layout;
+    }
 
-    // 首遇微课卡
+    // 首遇微课卡（调号卡 `rc|` 与和弦卡 `rcq|` 各自去重；开关关闭或已见过则不弹）
     const state = ctx.getState();
-    const cid = ruleCardId(cq.question.type, cq.question.n, cq.question.ask);
-    if (!state.seenKeys.includes(cid)) {
-      const card = firstSeen(cq.question.type, cq.question.n, cq.question.ask);
-      pad.setDisabled(true);
-      const sheet = ruleCardSheet(card, (remember) => {
+    const card = q.cq !== undefined ? firstSeenChord(q.cq) : firstSeen(q.type, q.n, q.ask);
+    const cid = card.id;
+    if (state.config.showRuleCards && !state.seenKeys.includes(cid)) {
+      pad?.setDisabled(true);
+      chordIn?.setDisabled(true);
+      const dismiss = (remember: boolean): void => {
+        overlayCloser = null;
         if (remember) ctx.update((s) => markSeen(s, cid));
         sheet.destroy();
         overlay.replaceChildren();
         controller.markShown();
         pad?.setDisabled(false);
-      });
+        chordIn?.setDisabled(false);
+      };
+      const sheet = ruleCardSheet(card, dismiss);
+      overlayCloser = () => dismiss(false); // 返回键关卡 = 跳过
       overlay.replaceChildren(sheet.root);
     } else {
       controller.markShown();
     }
   }
 
-  function submitAnswer(label: string, cq: CurrentQuestion): void {
-    if (pad === null || feedback !== null) return;
-    pad.setDisabled(true);
-    const res = controller.submit(label);
+  function submitAnswer(answer: string | readonly number[], cq: CurrentQuestion): void {
+    if (feedback !== null || (pad === null && chordIn === null)) return;
+    pad?.setDisabled(true);
+    chordIn?.setDisabled(true);
+    const res = controller.submit(answer);
+    // build 题提交后播正解和弦
+    if (cq.question.train === 'build' && cq.question.cq?.chord) {
+      try {
+        playChord(chordMidis(cq.question.cq.chord));
+      } catch {
+        // 音频不可用时静默
+      }
+    }
     if (res.ok) {
       combo++;
       comboNum.textContent = String(combo);
-      pad.mark(label, 'correct');
+      if (typeof answer === 'string') pad?.mark(answer, 'correct');
       try {
         playCorrect(cq.question.type, cq.question.n, cq.question.ask, combo);
       } catch {
@@ -243,8 +431,8 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
     } else {
       combo = 0;
       comboNum.textContent = '0';
-      pad.mark(label, 'wrong');
-      pad.mark(res.correctLabel, 'correct');
+      if (typeof answer === 'string') pad?.mark(answer, 'wrong');
+      pad?.mark(res.correctLabel, 'correct');
       try {
         playWrong();
       } catch {
@@ -277,6 +465,12 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
     const okCount = records.filter((r) => r.ok).length;
     const total = records.length;
     const nextStart = blockRecordStart + total;
+    const close = (): void => {
+      overlayCloser = null;
+      sheet.remove();
+      overlay.replaceChildren();
+      done();
+    };
     const sheet = h(
       'div',
       { className: 'sheet-wrap' },
@@ -290,16 +484,11 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
           className: 'btn btn--primary btn--wide',
           text: '继续',
           attrs: { type: 'button' },
-          on: {
-            click: () => {
-              sheet.remove();
-              overlay.replaceChildren();
-              done();
-            },
-          },
+          on: { click: close },
         }),
       ),
     );
+    overlayCloser = close;
     overlay.replaceChildren(sheet);
     return nextStart;
   }
@@ -384,15 +573,28 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   // 启动
   later(() => next(), 0);
 
+  // 返回键拦截：弹层（微课卡 / 块小结 / 反馈条）优先关闭
+  ctx.setBackInterceptor(() => {
+    if (overlayCloser === null) return false;
+    const close = overlayCloser;
+    overlayCloser = null;
+    close();
+    return true;
+  });
+
   return {
     root,
     destroy(): void {
       destroyed = true;
       for (const t of timers) window.clearTimeout(t);
       window.clearInterval(ticker);
+      pad?.destroy();
+      chordIn?.destroy();
       document.removeEventListener('keydown', onKey);
       stage.removeEventListener('touchstart', onTouchStart);
       stage.removeEventListener('touchend', onTouchEnd);
+      ctx.setBackInterceptor(null);
+      overlayCloser = null;
     },
   };
 }

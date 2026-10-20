@@ -94,6 +94,10 @@ export function homeScreen(ctx: AppContext): ScreenInstance {
           { value: 'sig', label: '认调' },
           { value: 'note', label: '认音' },
           { value: 'mix', label: '混合' },
+          { value: 'func', label: '和弦归属' },
+          { value: 'diatonic', label: '顺阶和弦' },
+          { value: 'degrees', label: '键盘音级' },
+          { value: 'build', label: '和弦构建' },
         ], free.train, (v) => (free.train = v)),
         seg('谱号', [
           { value: 'treble', label: '高音' },

@@ -36,6 +36,11 @@ export interface AppContext {
   /** 重置到某屏幕（清空历史） */
   reset(route: Route): void;
   back(): void;
+  /**
+   * 注册返回键拦截（弹层优先）：返回 true 表示弹层已关闭、本次返回已消费。
+   * 屏幕 destroy 时传 null 注销。
+   */
+  setBackInterceptor(fn: (() => boolean) | null): void;
 }
 
 export type ScreenFactories = Record<RouteName, ScreenFactory>;

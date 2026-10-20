@@ -29,6 +29,8 @@ export interface AppConfig {
   volume: number;
   /** 大字号模式 */
   bigFont: boolean;
+  /** 首遇微课卡开关（关闭后不再弹任何微课卡） */
+  showRuleCards: boolean;
 }
 
 /** 关卡进度 */
@@ -63,7 +65,7 @@ export interface AppState {
 }
 
 export function defaultConfig(): AppConfig {
-  return { clef: 'treble', ask: 'maj', train: 'sig', sound: true, volume: 0.8, bigFont: false };
+  return { clef: 'treble', ask: 'maj', train: 'sig', sound: true, volume: 0.8, bigFont: false, showRuleCards: true };
 }
 
 export function createInitialState(): AppState {
@@ -154,6 +156,7 @@ function normalizeConfig(o: Dict): AppConfig {
     sound: soundRaw !== undefined ? asBool(soundRaw, d.sound) : !asBool(muteRaw, false),
     volume: clamp(asNum(volRaw, d.volume * 100) > 1 ? asNum(volRaw, d.volume * 100) / 100 : asNum(volRaw, d.volume), 0, 1),
     bigFont: asBool(pick(o, ['bigFont', 'big', 'largeFont']), d.bigFont),
+    showRuleCards: asBool(pick(o, ['showRuleCards', 'ruleCards', 'showCards']), d.showRuleCards),
   };
 }
 

@@ -1,11 +1,41 @@
 /**
- * 统计页：7 日题数 / 正确率小图、每调号正确率条形（弱项标红）、徽章墙、打卡日历。
+ * 统计页：7 日题数 / 正确率小图、每调号正确率条形（弱项标红）、模式表现条形、徽章墙、打卡日历。
  */
 
 import { aggregate } from '../../core/stats';
 import { h, icon, dateKeyOf, fmtPct } from '../dom';
 import type { AppContext, ScreenInstance } from '../router';
 import { badgeWall } from './result';
+
+/** 训练模式 → 中文名（「模式表现」条形区） */
+const TRAIN_LABELS: Record<string, string> = {
+  sig: '认调',
+  note: '认音',
+  piece: '曲目',
+  func: '和弦归属',
+  diatonic: '顺阶和弦',
+  degrees: '键盘音级',
+  build: '和弦构建',
+};
+
+/** 正确率条形行（调号 / 模式共用；<70% 标红） */
+function accBarRow(label: string, accuracy: number | null): HTMLElement {
+  const weak = accuracy !== null && accuracy < 0.7;
+  return h(
+    'div',
+    { className: `keybar${weak ? ' is-weak' : ''}` },
+    h('span', { className: 'keybar__label', text: label }),
+    h(
+      'div',
+      { className: 'keybar__track' },
+      h('div', {
+        className: 'keybar__fill',
+        attrs: { style: `--kb:${((accuracy ?? 0) * 100).toFixed(1)}%` },
+      }),
+    ),
+    h('span', { className: 'keybar__value', text: fmtPct(accuracy) }),
+  );
+}
 
 /** 7 日柱状（题数）+ 折线（正确率） */
 function weeklyChart(daily: ReadonlyArray<{ date: string; count: number; accuracy: number | null }>): HTMLElement {
@@ -104,24 +134,18 @@ export function profileScreen(ctx: AppContext): ScreenInstance {
           : h(
               'div',
               { className: 'keybars' },
-              ...agg.keyBars.map((k) => {
-                const weak = k.accuracy !== null && k.accuracy < 0.7;
-                return h(
-                  'div',
-                  { className: `keybar${weak ? ' is-weak' : ''}` },
-                  h('span', { className: 'keybar__label', text: `${k.n}${k.type === 'sh' ? '♯' : '♭'}` }),
-                  h(
-                    'div',
-                    { className: 'keybar__track' },
-                    h('div', {
-                      className: 'keybar__fill',
-                      attrs: { style: `--kb:${((k.accuracy ?? 0) * 100).toFixed(1)}%` },
-                    }),
-                  ),
-                  h('span', { className: 'keybar__value', text: fmtPct(k.accuracy) }),
-                );
-              }),
+              ...agg.keyBars.map((k) => accBarRow(`${k.n}${k.type === 'sh' ? '♯' : '♭'}`, k.accuracy)),
             ),
+      ),
+      h('h2', { className: 'section-title', text: '模式表现' }),
+      h(
+        'section',
+        { className: 'card' },
+        h(
+          'div',
+          { className: 'keybars' },
+          ...agg.modeBars.map((m) => accBarRow(TRAIN_LABELS[m.train] ?? m.train, m.accuracy)),
+        ),
       ),
       h('h2', { className: 'section-title', text: '徽章墙' }),
       badgeWall(state.badges),

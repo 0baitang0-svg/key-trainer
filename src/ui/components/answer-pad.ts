@@ -1,5 +1,5 @@
 /**
- * 答题键盘：认调 6 选（2×3 六宫格）/ 认音 3 选（三列）。
+ * 答题键盘：认调 6 选（2×3 六宫格）/ 认音 3 选（三列）/ 和弦题 4 选（2×2）。
  * 全部落在屏幕下半的拇指区，触高 ≥56px。
  */
 
@@ -8,8 +8,8 @@ import { h } from '../dom';
 export interface AnswerPadOptions {
   /** 展示选项（顺序即键盘顺序） */
   options: string[];
-  /** 认音 = 三列一行；认调 = 三列两行 */
-  layout: 'row3' | 'grid6';
+  /** 认音 = 三列一行；认调 = 三列两行；和弦题 = 两列两行 */
+  layout: 'row3' | 'grid6' | 'grid4';
   onPick: (label: string, index: number) => void;
 }
 

@@ -98,6 +98,23 @@ export function playWrong(): void {
   });
 }
 
+/**
+ * 和弦齐奏：多振荡器同响三角波（listen-func 出题播放 / build 提交后播正解和弦）。
+ * @param midis  参与齐奏的 MIDI 号
+ * @param durMs 齐奏时长（毫秒），默认 900ms
+ */
+export function playChord(midis: number[], durMs = 900): void {
+  safePlay(() => {
+    if (midis.length === 0) return;
+    const t0 = audioEngine.now();
+    const dur = Math.max(0.05, durMs / 1000);
+    const peak = Math.min(0.24, 0.85 / Math.sqrt(midis.length));
+    for (const m of midis) {
+      tone(midiToFreq(m), t0, dur, peak);
+    }
+  });
+}
+
 /** 通关音效：IV–V–I 终止式（末和弦 1s 长音） */
 export function playCadence(keyType: SigType = 'sh', keyN = 0, ask: Ask = 'maj'): void {
   safePlay(() => {

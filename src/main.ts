@@ -11,7 +11,10 @@ import {
   type AppState,
   type StorageAdapter,
 } from './core/store';
+import { App } from '@capacitor/app';
 import { createStorageAdapter } from './platform/storage-adapter';
+import { installBackHandler } from './platform/back-handler';
+import { showToast } from './ui/components/toast';
 import { Router, type AppContext, type Route, type ScreenFactories } from './ui/router';
 import { homeScreen } from './ui/screens/home';
 import { sessionScreen } from './ui/screens/session';
@@ -34,6 +37,8 @@ export async function mountApp(root: HTMLElement, options: MountOptions = {}): P
   const storageKey = options.storageKey ?? STORAGE_KEY;
   let state: AppState = await loadState(storage, storageKey);
   let router: Router | null = null;
+  /** 返回键拦截（弹层优先），由屏幕注册 / 注销 */
+  let backInterceptor: (() => boolean) | null = null;
 
   const ctx: AppContext = {
     getState: () => state,
@@ -48,6 +53,9 @@ export async function mountApp(root: HTMLElement, options: MountOptions = {}): P
     replace: (route: Route) => router?.replace(route),
     reset: (route: Route) => router?.reset(route),
     back: () => router?.back(),
+    setBackInterceptor(fn: (() => boolean) | null): void {
+      backInterceptor = fn;
+    },
   };
 
   const factories: ScreenFactories = {
@@ -90,6 +98,20 @@ export async function mountApp(root: HTMLElement, options: MountOptions = {}): P
   });
 
   router.reset({ name: 'home' });
+
+  // 返回键：弹层优先 → 页面返回 → 主页两下退出
+  installBackHandler({
+    isHome: () => router?.route?.name === 'home',
+    onBack: () => {
+      ctx.back();
+      return true;
+    },
+    onExit: () => {
+      void App.exitApp();
+    },
+    onToast: showToast,
+    intercept: () => backInterceptor?.() === true,
+  });
 }
 
 const appEl = document.getElementById('app');

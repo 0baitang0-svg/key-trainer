@@ -1,6 +1,6 @@
 /**
- * 关卡层：4 章（0–1♯♭ / 2–3♯♭ / 4–5♯♭ / 6–7♯♭）共 27 关，
- * 通关判定 + 星级 + 每日编排（热身/主节/曲目关卡/冲刺）。
+ * 关卡层：5 章（0–1♯♭ / 2–3♯♭ / 4–5♯♭ / 6–7♯♭ / 和弦与功能）共 34 关，
+ * 通关判定 + 星级 + 每日编排（热身/主节/曲目关卡/和弦块/冲刺）。
  */
 
 import type { Clef, SigType } from './music-theory';
@@ -32,10 +32,12 @@ export interface Level {
   passAcc: number;
   /** 通关反应中位数门槛（毫秒） */
   passMedianMs: number;
+  /** 抽题配置覆盖（和弦关卡用；未给字段走 levelPickConfig 默认值） */
+  pick?: Partial<PickConfig>;
 }
 
-/** 各章反应门槛：章1 2500ms / 章2 2000ms / 章3 1500ms / 章4 1200ms */
-export const CHAPTER_PASS_MS = [2500, 2000, 1500, 1200] as const;
+/** 各章反应门槛：章1 2500ms / 章2 2000ms / 章3 1500ms / 章4 1200ms / 章5 3000ms（build 类关 4000ms） */
+export const CHAPTER_PASS_MS = [2500, 2000, 1500, 1200, 3000] as const;
 
 export interface Chapter {
   id: number;
@@ -49,6 +51,7 @@ export const CHAPTERS: readonly Chapter[] = [
   { id: 2, title: '进阶 · 二三号', range: '2–3♯♭', passMedianMs: CHAPTER_PASS_MS[1] },
   { id: 3, title: '熟练 · 四五号', range: '4–5♯♭', passMedianMs: CHAPTER_PASS_MS[2] },
   { id: 4, title: '极限 · 六七号', range: '6–7♯♭', passMedianMs: CHAPTER_PASS_MS[3] },
+  { id: 5, title: '和弦与功能', range: '属七 · 顺阶 · 构建', passMedianMs: CHAPTER_PASS_MS[4] },
 ];
 
 function lv(
@@ -60,6 +63,7 @@ function lv(
   questionCount: number,
   bossQuestion = false,
   pieceId?: string,
+  opts?: { passMedianMs?: number; pick?: Partial<PickConfig> },
 ): Level {
   return {
     id,
@@ -71,7 +75,8 @@ function lv(
     bossQuestion,
     pieceId,
     passAcc: 0.8,
-    passMedianMs: CHAPTER_PASS_MS[chapter - 1],
+    passMedianMs: opts?.passMedianMs ?? CHAPTER_PASS_MS[chapter - 1],
+    pick: opts?.pick,
   };
 }
 
@@ -111,6 +116,43 @@ export const LEVELS: readonly Level[] = [
   lv('c4-04', 4, '七个降号', 'C♭ 大调 / a♭ 小调，降号走到了尽头', [{ type: 'fl', n: 6 }, { type: 'fl', n: 7 }], 6),
   lv('c4-05', 4, '等音对决', 'F♯ ↔ G♭：同音异名的调号怎么记', [{ type: 'sh', n: 6 }, { type: 'fl', n: 6 }, { type: 'sh', n: 7 }, { type: 'fl', n: 7 }], 7),
   lv('c4-06', 4, '理论极值挑战', '6–7♯♭ 全混 Boss：把口诀练成条件反射', [{ type: 'sh', n: 6 }, { type: 'sh', n: 7 }, { type: 'fl', n: 6 }, { type: 'fl', n: 7 }], 8, true),
+
+  // 第 5 章：和弦与功能（3000ms；build 类关 4000ms）
+  lv('c5-01', 5, '属七归屋', '属七根音上行纯五度 = 主音，同名大小调共用一个属七', [{ type: 'sh', n: 0 }, { type: 'sh', n: 1 }, { type: 'fl', n: 0 }, { type: 'fl', n: 1 }], 6, false, undefined, {
+    pick: {
+      train: 'func',
+      kinds: ['dom-key', 'key-dom'],
+      kindWeights: { 'dom-key': 3, 'key-dom': 1 },
+    },
+  }),
+  lv('c5-02', 5, '顺阶三和弦', '看级数报顺阶三和弦：I 到 vii° 逐级直读', [{ type: 'sh', n: 0 }, { type: 'sh', n: 1 }, { type: 'sh', n: 2 }, { type: 'fl', n: 1 }], 6, false, undefined, {
+    pick: { train: 'diatonic', kinds: ['deg2chord'] },
+  }),
+  lv('c5-03', 5, '顺阶七和弦与功能', '和弦 → 级数 / 功能：主下属属三功能归位', [{ type: 'sh', n: 0 }, { type: 'sh', n: 1 }, { type: 'fl', n: 1 }, { type: 'fl', n: 2 }], 7, false, undefined, {
+    pick: { train: 'diatonic', kinds: ['chord2deg', 'chord2func'] },
+  }),
+  lv('c5-04', 5, '键盘升降反应', '调内变化音、级数音名与调名互认', [{ type: 'sh', n: 2 }, { type: 'sh', n: 3 }, { type: 'fl', n: 2 }, { type: 'fl', n: 3 }], 7, false, undefined, {
+    pick: { train: 'degrees', kinds: ['key2acc', 'deg2note', 'acc2key'] },
+  }),
+  lv('c5-05', 5, '拼和弦工坊', '大小三 + 属七：按音程公式拼出组成音', [{ type: 'sh', n: 0 }, { type: 'sh', n: 1 }, { type: 'fl', n: 0 }, { type: 'fl', n: 1 }], 6, false, undefined, {
+    passMedianMs: 4000,
+    pick: { train: 'build', kinds: ['build-notes', 'build-mc'], qualities: ['maj', 'min', '7'] },
+  }),
+  lv('c5-06', 5, '小调调式室', '和声 / 旋律小调的顺阶和弦混编', [{ type: 'sh', n: 1 }, { type: 'sh', n: 3 }, { type: 'fl', n: 1 }, { type: 'fl', n: 3 }], 7, false, undefined, {
+    pick: { train: 'diatonic', kinds: ['deg2chord', 'chord2deg'], scales: ['harmMin', 'melMin'] },
+  }),
+  lv('c5-07', 5, '章末 Boss：功能大乱斗', '四种和弦训练全混，Boss 压轴', [{ type: 'sh', n: 0 }, { type: 'sh', n: 2 }, { type: 'fl', n: 1 }, { type: 'fl', n: 3 }], 8, true, undefined, {
+    pick: {
+      train: 'func',
+      kinds: ['dom-key', 'key-dom', 'listen-func', 'deg2chord', 'chord2deg', 'chord2func', 'key2acc', 'deg2note', 'acc2key', 'build-notes', 'build-mc', 'notes2quality'],
+      kindWeights: {
+        'dom-key': 3, 'key-dom': 3, 'listen-func': 3,
+        deg2chord: 3, chord2deg: 3, chord2func: 3,
+        key2acc: 2, deg2note: 2, acc2key: 2,
+        'build-notes': 2, 'build-mc': 2, notes2quality: 2,
+      },
+    },
+  }),
 ];
 
 /** 按 id 查关卡 */
@@ -123,13 +165,23 @@ export function chapterLevels(chapter: number): Level[] {
   return LEVELS.filter((l) => l.chapter === chapter);
 }
 
-/** 关卡 → 抽题配置（train 由上层决定，认音关把 ask 收敛为 maj） */
+/** 关卡 → 抽题配置（train 由上层决定，认音关把 ask 收敛为 maj；和弦关用 level.pick 覆盖） */
 export function levelPickConfig(level: Level, train: TrainMode = 'sig', clefs: Clef[] = ['treble', 'bass']): PickConfig {
-  return {
+  const base: PickConfig = {
     train,
     clefs,
     asks: train === 'sig' ? ['maj', 'min'] : ['maj'],
     keys: level.dist.map((k) => ({ type: k.type, n: k.n })),
+  };
+  const pick = level.pick;
+  if (pick === undefined) return base;
+  return {
+    ...base,
+    ...pick,
+    train: pick.train ?? train,
+    clefs: pick.clefs ?? clefs,
+    asks: pick.asks ?? base.asks,
+    keys: pick.keys ?? base.keys,
   };
 }
 
@@ -184,7 +236,7 @@ export function checkPass(level: Level, results: ReadonlyArray<LevelAttempt>): P
 /* ---------- 每日编排 ---------- */
 
 export interface PlanBlock {
-  kind: 'warmup' | 'main' | 'level' | 'sprint';
+  kind: 'warmup' | 'main' | 'level' | 'chord' | 'sprint';
   /** 预计时长（分钟） */
   minutes: number;
   /** level 块指定关卡 */
@@ -197,6 +249,8 @@ export interface PlanBlock {
 export interface PlanStats {
   totalAttempts: number;
   accuracy: number | null;
+  /** 已通关关卡 id（和弦块触发判定用） */
+  passedLevelIds?: string[];
 }
 
 export interface DailyPlanConfig {
@@ -213,20 +267,44 @@ export interface DailyPlanConfig {
 /** 冲刺开启门槛：样本 ≥20 且正确率 ≥85% */
 export const SPRINT_MIN_ATTEMPTS = 20;
 export const SPRINT_MIN_ACC = 0.85;
+/** 和弦块开启门槛（路径之一）：总作答数 ≥30 */
+export const CHORD_MIN_ATTEMPTS = 30;
+
+/** 和弦块混编权重：func:diatonic:degrees:build = 3:3:2:2 */
+export const CHORD_MIX_WEIGHTS: Record<'func' | 'diatonic' | 'degrees' | 'build', number> = {
+  func: 3,
+  diatonic: 3,
+  degrees: 2,
+  build: 2,
+};
+
+/** 是否为和弦训练模式（func / diatonic / degrees / build） */
+export function isChordMode(train: TrainMode): boolean {
+  return train === 'func' || train === 'diatonic' || train === 'degrees' || train === 'build';
+}
 
 /**
- * 每日编排：热身 1 分 + 主节 2–3 分 + 曲目关卡 2 分 + 可选冲刺 1 分。
+ * 每日编排：热身 1 分 + 主节 2–3 分 + 曲目关卡 2 分 + 可选和弦块 1 分 + 可选冲刺 1 分。
  * 主节时长自适应：正确率 <80% 给 3 分钟，否则 2 分钟。
+ * 和弦块（level 之后、sprint 之前）触发条件：任一 c5 关已通过 / 主训练为和弦模式 / 总作答数 ≥30。
  */
 export function buildDailyPlan(cfg: DailyPlanConfig = {}, stats?: PlanStats): PlanBlock[] {
   const train = cfg.train ?? 'sig';
   const weak = stats !== undefined && stats.accuracy !== null && stats.accuracy < 0.8;
   const plan: PlanBlock[] = [
     { kind: 'warmup', minutes: 1, focus: '热身：最近练过的调号快问快答' },
-    { kind: 'main', minutes: weak ? 3 : 2, focus: `主节：${train === 'note' ? '认音' : train === 'piece' ? '曲目认调' : '认调'}自适应抽题` },
+    { kind: 'main', minutes: weak ? 3 : 2, focus: `主节：${train === 'note' ? '认音' : train === 'piece' ? '曲目认调' : isChordMode(train) ? '和弦反应' : '认调'}自适应抽题` },
   ];
   if (cfg.hasLevel !== false) {
     plan.push({ kind: 'level', minutes: 2, levelId: cfg.levelId, focus: '曲目关卡：跟着名曲巩固调号' });
+  }
+  const passed = new Set(stats?.passedLevelIds ?? []);
+  const chordOn =
+    LEVELS.some((l) => l.chapter === 5 && passed.has(l.id)) ||
+    isChordMode(train) ||
+    (stats?.totalAttempts ?? 0) >= CHORD_MIN_ATTEMPTS;
+  if (chordOn) {
+    plan.push({ kind: 'chord', minutes: 1, focus: '和弦块：功能 / 顺阶 / 音级 / 拼和弦 按 3:3:2:2 混编' });
   }
   const earned =
     cfg.sprint === true ||
