@@ -19,9 +19,10 @@ import {
 } from '../components/piano-keyboard';
 import { seqStage, type SeqStage } from '../components/seq-stage';
 import { staffOptionsFor, staffView } from '../components/staff-view';
-import { feedbackBanner, ruleCardSheet, type FeedbackBanner } from '../components/feedback-banner';
+import { feedbackBanner, type FeedbackBanner } from '../components/feedback-banner';
+import { lessonSheet } from '../components/lesson-card';
 import { showCoachOnce } from '../components/coach-mark';
-import { firstSeen, firstSeenChord, firstSeenSeq } from '../../content/rules-cards';
+import { getLesson, moduleForQuestion } from '../../content/micro-lessons';
 import { findPiece } from '../../content/repertoire';
 import { hasSeenFlag, markSeen } from '../../core/store';
 import { findLevel } from '../../core/levels';
@@ -109,6 +110,13 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   const blockLabel = h('span', { className: 'session__block', text: plan.title });
   const numLabel = h('span', { className: 'session__nums', text: '' });
   const timeLabel = h('span', { className: 'session__time', text: '' });
+  const lessonChip = h('button', {
+    className: 'lesson-chip',
+    attrs: { type: 'button', 'aria-label': '打开本题微课' },
+    html: `${icon('book', 16).outerHTML}<span>微课</span>`,
+    on: { click: () => openManualLesson() },
+  });
+  const metaRight = h('div', { className: 'session__meta-right' }, lessonChip, timeLabel);
 
   const root = h(
     'section',
@@ -125,7 +133,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       h(
         'div',
         { className: 'session__meta' },
-        h('div', { className: 'session__meta-row' }, blockLabel, timeLabel),
+        h('div', { className: 'session__meta-row' }, blockLabel, metaRight),
         h('div', { className: 'progress' }, progressFill),
         numLabel,
       ),
@@ -194,6 +202,31 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   /** 当前视奏键盘（函数内读取，避开 askCurrent 里的空值收窄） */
   function currentSeqKb(): PianoKeyboard | null {
     return seqKb;
+  }
+
+  /**
+   * 手动打开当前题所属类目的完整微课（头部「微课」按钮）。
+   * 无 seenKeys 读写、开关关闭也照常打开；打开期间禁输入、返回键可关。
+   */
+  function openManualLesson(): void {
+    if (overlayCloser !== null || feedback !== null || currentCq === null) return;
+    const lesson = getLesson(moduleForQuestion(currentCq.question));
+    if (lesson === undefined) return;
+    pad?.setDisabled(true);
+    chordIn?.setDisabled(true);
+    seqKb?.setDisabled(true);
+    const close = (): void => {
+      overlayCloser = null;
+      sheet.destroy();
+      overlay.replaceChildren();
+      pad?.setDisabled(false);
+      chordIn?.setDisabled(false);
+      seqKb?.setDisabled(false);
+      pumpCoach();
+    };
+    const sheet = lessonSheet(lesson, { mode: 'manual', onDismiss: close });
+    overlayCloser = close;
+    overlay.replaceChildren(sheet.root);
   }
 
   /* ---------- 功能气泡队列（串行弹，微课卡弹层优先） ---------- */
@@ -514,22 +547,17 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       padHost.dataset.layout = layout;
     }
 
-    // 首遇微课卡（调号卡 `rc|` 与和弦/视奏卡 `rcq|` 各自去重；开关关闭或已见过则不弹）
+    // 首遇微课：每个类目只弹一次；关闭（点知道了 / 返回键）即记已见，不再「跳过=再弹」
     const state = ctx.getState();
-    const card =
-      q.seq !== undefined
-        ? firstSeenSeq(q)
-        : q.cq !== undefined
-          ? firstSeenChord(q.cq)
-          : firstSeen(q.type, q.n, q.ask);
-    const cid = card.id;
-    if (state.config.showRuleCards && !state.seenKeys.includes(cid)) {
+    const mid = moduleForQuestion(q);
+    const lesson = getLesson(mid);
+    if (state.config.showRuleCards && !state.seenKeys.includes(mid) && lesson !== undefined) {
       pad?.setDisabled(true);
       chordIn?.setDisabled(true);
       currentSeqKb()?.setDisabled(true);
-      const dismiss = (remember: boolean): void => {
+      const dismiss = (): void => {
         overlayCloser = null;
-        if (remember) ctx.update((s) => markSeen(s, cid));
+        ctx.update((s) => markSeen(s, mid));
         sheet.destroy();
         overlay.replaceChildren();
         controller.markShown();
@@ -538,15 +566,15 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
         seqKb?.setDisabled(false);
         pumpCoach(); // 卡片关掉后补弹排队的气泡
       };
-      const sheet = ruleCardSheet(card, dismiss);
-      overlayCloser = () => dismiss(false); // 返回键关卡 = 跳过
+      const sheet = lessonSheet(lesson, { mode: 'auto', onDismiss: dismiss });
+      overlayCloser = dismiss;
       overlay.replaceChildren(sheet.root);
       // 首次弹微课卡：气泡盖在卡片上方（先看 flag，只弹一次）
       offerCoach(
         'coach.rulecard',
-        () => sheet.root.querySelector('.rule-card'),
+        () => sheet.root.querySelector('.mlesson'),
         '微课卡',
-        '这是微课卡：30 秒记住一条读谱规则。可在设置里关掉。',
+        '每个类目只弹一次；练习时随时点右上角「微课」复习。',
         true,
       );
     } else {

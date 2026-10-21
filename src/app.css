@@ -52,6 +52,15 @@
   --chart-bar: rgba(167, 139, 250, 0.42);
   --scrim: rgba(10, 8, 32, 0.48);
 
+  /* 微课纸面（不透明讲义卡，双主题各一套） */
+  --sheet-paper: #f7f3ea;
+  --sheet-ink: #241f3d;
+  --sheet-ink-2: #4a4478;
+  --sheet-muted: #6f6a94;
+  --sheet-line: rgba(36, 31, 61, 0.14);
+  --sheet-accent: #6d4bd8;
+  --sheet-shadow: 0 16px 40px rgba(4, 6, 20, 0.5);
+
   /* 旧语义别名（兼容漏改的引用） */
   --paper: var(--bg-1);
   --card: var(--glass);
@@ -114,6 +123,13 @@ html[data-theme='light'] {
   /* 图表条 / 弹层遮罩 */
   --chart-bar: rgba(124, 92, 255, 0.32);
   --scrim: rgba(90, 80, 160, 0.28);
+
+  /* 微课纸面 */
+  --sheet-paper: #fff;
+  --sheet-ink: #2a2350;
+  --sheet-accent: #6a45e0;
+  --sheet-line: rgba(42, 35, 80, 0.14);
+  --sheet-shadow: 0 10px 26px rgba(42, 35, 80, 0.16);
 }
 
 html.font-big {
@@ -807,6 +823,42 @@ svg.staff {
   font-variant-numeric: tabular-nums;
 }
 
+.session__meta-right {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* 头部「微课」chip：视觉 32px，::after 把点击区补到 44px */
+.lesson-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-line);
+  background: var(--glass-2);
+  color: var(--accent);
+  font-size: calc(11.5px * var(--fs));
+  letter-spacing: 0.08em;
+}
+
+.lesson-chip::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 44px;
+  transform: translateY(-50%);
+}
+
+.lesson-chip .icon {
+  flex: none;
+}
+
 .session__nums {
   font-size: calc(11.5px * var(--fs));
   color: var(--muted);
@@ -1146,6 +1198,17 @@ svg.staff {
   }
 }
 
+@keyframes mlesson-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .sheet-wrap {
   position: absolute;
   inset: 0;
@@ -1175,7 +1238,6 @@ svg.staff {
   margin-bottom: 12px;
 }
 
-.rule-card__eyebrow,
 .block-summary__eyebrow,
 .badge-sheet__eyebrow {
   font-size: calc(11px * var(--fs));
@@ -1184,56 +1246,247 @@ svg.staff {
   margin-bottom: 6px;
 }
 
-.rule-card__title {
-  font-size: calc(19px * var(--fs));
-  margin-bottom: 12px;
+/* ---------- 微课讲义卡（不透明纸面 bottom-sheet） ---------- */
+
+.sheet.mlesson {
+  background: var(--sheet-paper);
+  color: var(--sheet-ink);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-top: 3px solid var(--sheet-accent);
+  box-shadow: var(--sheet-shadow);
 }
 
-.rule-card__lines {
+/* 纸卡入场：升 14px + 淡入 200ms（reduced-motion 停用） */
+@media (prefers-reduced-motion: no-preference) {
+  .sheet.mlesson {
+    animation: mlesson-in 200ms ease-out;
+  }
+}
+
+.mlesson__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.mlesson__head-text {
+  min-width: 0;
+}
+
+.mlesson__eyebrow {
+  font-size: calc(11px * var(--fs));
+  letter-spacing: 0.22em;
+  color: var(--sheet-accent);
+  margin-bottom: 6px;
+}
+
+.mlesson__title {
+  font-size: calc(19px * var(--fs));
+  color: var(--sheet-ink);
+  margin-bottom: 8px;
+}
+
+.mlesson__back {
+  flex: none;
+  padding: 6px 4px;
+  color: var(--sheet-accent);
+  font-size: calc(13px * var(--fs));
+  letter-spacing: 0.06em;
+}
+
+.mlesson__sec + .mlesson__sec {
+  margin-top: 14px;
+}
+
+.mlesson__sec-title {
+  font-size: calc(11px * var(--fs));
+  letter-spacing: 0.18em;
+  color: var(--sheet-ink-2);
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--sheet-line);
+  margin-bottom: 8px;
+}
+
+.mlesson__lines {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
-.rule-card__lines li {
+.mlesson__lines li {
   position: relative;
   padding-left: 16px;
   font-size: calc(13.5px * var(--fs));
   line-height: 1.75;
+  color: var(--sheet-ink);
 }
 
-.rule-card__lines li::before {
+.mlesson__lines li::before {
   content: '';
   position: absolute;
   left: 2px;
   top: 0.72em;
   width: 5px;
   height: 5px;
-  background: var(--accent);
+  background: var(--sheet-accent);
   border-radius: 1px;
   transform: rotate(45deg);
 }
 
-.rule-card__example {
-  margin-top: 14px;
+.mlesson__example {
+  margin-top: 10px;
   padding: 10px 12px;
-  background: var(--glass-2);
-  border: 1px solid var(--glass-line);
+  border: 1px dashed var(--sheet-line);
   border-radius: 10px;
+  background: rgba(36, 31, 61, 0.03);
   font-family: var(--serif);
   font-size: calc(14px * var(--fs));
+  line-height: 1.7;
   letter-spacing: 0.03em;
+  color: var(--sheet-ink-2);
+  white-space: pre-line;
 }
 
-.rule-card__actions {
+.mlesson__demo {
   display: flex;
-  gap: 10px;
-  margin-top: 16px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 12px;
+  border: 1px solid var(--sheet-line);
+  border-radius: 10px;
+  background: rgba(36, 31, 61, 0.04);
+  color: var(--sheet-accent);
+  font-size: calc(13.5px * var(--fs));
+  letter-spacing: 0.05em;
 }
 
-.rule-card__actions .btn {
+.mlesson__foot {
+  margin-top: 4px;
+}
+
+/* 纸面上的按钮：去玻璃感，文字改纸面深色 */
+.mlesson .btn {
+  background: rgba(36, 31, 61, 0.05);
+  border-color: var(--sheet-line);
+  color: var(--sheet-ink);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.mlesson .btn--primary {
+  background: var(--sheet-accent);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: none;
+}
+
+.mlesson .btn--ghost {
+  background: transparent;
+}
+
+/* 谱面在米白纸上要深墨 */
+.mlesson .staff-card {
+  --staff: rgba(36, 31, 61, 0.5);
+  --staff-ink: #241f3d;
+  --ink: #241f3d;
+  --staff-glow: none;
+  background: rgba(36, 31, 61, 0.04);
+  border-color: var(--sheet-line);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ---------- 微课动画播放器 ---------- */
+
+.lesson-player {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--sheet-ink);
+}
+
+.lesson-player__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.lesson-player__head-text {
+  min-width: 0;
+}
+
+.lesson-player__label {
+  display: block;
+  font-size: calc(11px * var(--fs));
+  letter-spacing: 0.18em;
+  color: var(--sheet-accent);
+}
+
+.lesson-player__dots {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.lesson-player__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sheet-line);
+}
+
+.lesson-player__dot.is-active {
+  background: var(--sheet-accent);
+}
+
+.lesson-player__stage {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+}
+
+.lesson-player__stage .staff-card {
+  width: 100%;
+}
+
+.lesson-player__seq {
+  width: 100%;
+}
+
+.lesson-player__seq svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.lesson-player__caption {
+  min-height: 3em;
+  text-align: center;
+  font-family: var(--serif);
+  font-size: calc(15px * var(--fs));
+  line-height: 1.6;
+  letter-spacing: 0.03em;
+  color: var(--sheet-ink);
+}
+
+.lesson-player__foot {
+  display: flex;
+  gap: 8px;
+}
+
+.lesson-player__foot .btn {
   flex: 1;
+  min-height: 42px;
+  padding-inline: 6px;
+  font-size: calc(13.5px * var(--fs));
 }
 
 .block-summary {
@@ -1805,6 +2058,52 @@ svg.wk {
   font-size: calc(11.5px * var(--fs));
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* 微课回顾行（课序 + 标题 + 已读/未读圆点） */
+.lesson-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 2px;
+  text-align: left;
+  border-bottom: 1px solid var(--glass-line);
+  color: var(--ink);
+}
+
+.lesson-row:last-child {
+  border-bottom: none;
+}
+
+.lesson-row__no {
+  flex: none;
+  width: 22px;
+  font-family: var(--serif);
+  font-size: calc(13px * var(--fs));
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.lesson-row__title {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(14px * var(--fs));
+}
+
+.lesson-row__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--muted);
+  background: transparent;
+}
+
+.lesson-row__dot.is-read {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .toggle {
@@ -2626,4 +2925,67 @@ svg.piano.is-interactive {
   .session__pad[data-layout='seq'] svg.piano {
     height: clamp(76px, 22vh, 120px);
   }
+}
+
+/* ---------- 设置页 · 微课回顾（v0.1.5） ---------- */
+
+.card__sub {
+  margin: 14px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+}
+
+.lesson-review {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lesson-review__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  background: var(--glass);
+  color: var(--ink);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lesson-review__no {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.lesson-review__title {
+  flex: 1;
+}
+
+.lesson-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1.5px solid var(--muted);
+}
+
+.lesson-dot.is-read {
+  background: var(--accent);
+  border-color: var(--accent);
 }

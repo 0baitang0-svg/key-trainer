@@ -6,6 +6,7 @@
 
 import type { Ask, Clef } from './music-theory';
 import type { TrainMode } from './question-generator';
+import { remapLegacySeenKeys } from '../content/micro-lessons';
 import {
   buildStats,
   emptyItemStat,
@@ -337,7 +338,8 @@ export function migrate(raw: unknown): AppState {
       pick(dataSource, ['badges', 'medals', 'achievements']) ?? pick(o, ['badges']) ?? [],
     ),
     streak: normalizeStreak(pick(dataSource, ['streak', 'checkin', '打卡']) ?? pick(o, ['streak'])),
-    seenKeys: asStrArray(pick(dataSource, ['seenKeys', 'seen', 'seenCards']) ?? pick(o, ['seenKeys'])),
+    // 旧规则卡 key（rc| / rcq|）→ 新微课 id（mc|）；幂等，新 key 原样保留
+    seenKeys: remapLegacySeenKeys(asStrArray(pick(dataSource, ['seenKeys', 'seen', 'seenCards']) ?? pick(o, ['seenKeys']))),
     onboarded: asBool(pick(dataSource, ['onboarded', 'onboard']) ?? pick(o, ['onboarded']), false),
     seenFlags: asStrArray(pick(dataSource, ['seenFlags', 'flags']) ?? pick(o, ['seenFlags'])),
   };

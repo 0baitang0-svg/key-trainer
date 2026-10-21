@@ -7,6 +7,8 @@ import { setMuted, setVolume } from '../../audio/sfx';
 import { h, icon } from '../dom';
 import { showToast } from '../components/toast';
 import { applyTheme, type Theme } from '../theme';
+import { getLesson, LESSON_ORDER, type MicroLesson } from '../../content/micro-lessons';
+import { lessonSheet } from '../components/lesson-card';
 import type { AppContext, ScreenInstance } from '../router';
 
 function row(title: string, note: string, control: HTMLElement): HTMLElement {
@@ -214,8 +216,54 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
 
   const resetCardsBtn = armedButton('重置微课卡记录', '再点一次确认清空', () => {
     ctx.update((s) => ({ ...s, seenKeys: [] }));
-    showToast('已清空，下次训练会重新弹卡');
+    showToast('已清空，下次训练每个类目会重新弹一次');
+    refreshLessonDots();
   });
+
+  /* ---------- 微课回顾（逐类目手动打开完整微课） ---------- */
+
+  const lessonDotEls = new Map<string, HTMLElement>();
+  function refreshLessonDots(): void {
+    const seen = ctx.getState().seenKeys;
+    for (const [id, el] of lessonDotEls) el.classList.toggle('is-read', seen.includes(id));
+  }
+
+  let lessonSheetInst: { root: HTMLElement; destroy(): void } | null = null;
+  function openLessonCard(lesson: MicroLesson): void {
+    if (lessonSheetInst !== null) return;
+    const close = (): void => {
+      lessonSheetInst?.destroy();
+      lessonSheetInst = null;
+      overlay.replaceChildren();
+    };
+    lessonSheetInst = lessonSheet(lesson, { mode: 'manual', onDismiss: close });
+    overlay.replaceChildren(lessonSheetInst.root);
+  }
+
+  const lessonReview = h(
+    'div',
+    { className: 'lesson-review' },
+    ...LESSON_ORDER.flatMap((id) => {
+      const lesson = getLesson(id);
+      if (lesson === undefined) return [];
+      const dot = h('span', { className: 'lesson-dot' });
+      lessonDotEls.set(id, dot);
+      return [
+        h(
+          'button',
+          {
+            className: 'lesson-review__row',
+            attrs: { type: 'button' },
+            on: { click: () => openLessonCard(lesson) },
+          },
+          h('span', { className: 'lesson-review__no', text: String(lesson.no) }),
+          h('span', { className: 'lesson-review__title', text: lesson.title }),
+          dot,
+        ),
+      ];
+    }),
+  );
+  refreshLessonDots();
 
   /* ---------- 引导（二次确认） ---------- */
 
@@ -267,10 +315,12 @@ export function settingsScreen(ctx: AppContext): ScreenInstance {
     h(
       'section',
       { className: 'card' },
-      h('h2', { className: 'card__title', text: '提示卡' }),
-      row('首遇微课卡', '关闭后不再弹任何微课卡', ruleCardToggle),
+      h('h2', { className: 'card__title', text: '微课' }),
+      row('自动弹微课', '每个类目首遇弹一次；关闭不影响手动查看', ruleCardToggle),
       resetCardsBtn.root,
       h('p', { className: 'card__note', text: '只清空「已看过」记录，不影响训练数据。' }),
+      h('h3', { className: 'card__sub', text: '微课回顾' }),
+      lessonReview,
     ),
     h(
       'section',

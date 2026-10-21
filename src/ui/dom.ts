@@ -52,7 +52,7 @@ export function icon(name: IconName, size = 22): SVGSVGElement {
   return svg;
 }
 
-export type IconName = 'gear' | 'flame' | 'star' | 'star-fill' | 'back' | 'play' | 'check' | 'close' | 'flag' | 'chart' | 'grid';
+export type IconName = 'gear' | 'flame' | 'star' | 'star-fill' | 'back' | 'play' | 'check' | 'close' | 'flag' | 'chart' | 'grid' | 'book';
 
 const ICON_PATHS: Record<IconName, string> = {
   gear:
@@ -69,6 +69,7 @@ const ICON_PATHS: Record<IconName, string> = {
   flag: '<path d="M6.5 20V4.5M6.5 5.2h10.8l-2 3.6 2 3.6H6.5"/>',
   chart: '<path d="M4.5 19.5h15M7.5 16V9.5M12 16V5.5M16.5 16v-4"/>',
   grid: '<rect x="4.5" y="4.5" width="6" height="6"/><rect x="13.5" y="4.5" width="6" height="6"/><rect x="4.5" y="13.5" width="6" height="6"/><rect x="13.5" y="13.5" width="6" height="6"/>',
+  book: '<path d="M4 5.2A2.2 2.2 0 0 1 6.2 3H11.5v16.5H6.2A2.2 2.2 0 0 0 4 21.7z"/><path d="M20 5.2A2.2 2.2 0 0 0 17.8 3H12.5v16.5h5.3A2.2 2.2 0 0 1 20 21.7z"/>',
 };
 
 /** 本地日期 YYYY-MM-DD */

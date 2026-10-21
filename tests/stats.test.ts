@@ -207,7 +207,8 @@ describe('v1 → v2 迁移与导入导出', () => {
     expect(s.xp).toBe(240);
     expect(s.streak.dates).toEqual(['2026-10-01', '2026-10-02']);
     expect(s.streak.makeupDates).toEqual([]);
-    expect(s.seenKeys).toEqual(['rc|sh|1|maj']);
+    // 旧规则卡 key 迁移时重映射为新微课 id
+    expect(s.seenKeys).toEqual(['mc|key']);
     expect(s.badges).toEqual(['first-answer']);
   });
 
@@ -246,7 +247,7 @@ describe('v1 → v2 迁移与导入导出', () => {
       levelProgress: { passed: ['c1-01', 'c1-02'], stars: { 'c1-01': 3, 'c1-02': 2 } },
       badges: ['first-answer', 'first-pass'],
       streak: { dates: ['2026-10-18'], makeupDates: ['2026-10-12'] },
-      seenKeys: ['rc|fl|2|min'],
+      seenKeys: ['mc|key'],
     };
     expect(importJSON(exportJSON(state))).toEqual(state);
   });
