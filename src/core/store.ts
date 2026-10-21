@@ -156,7 +156,7 @@ function normalizeAsk(v: unknown): Ask {
 
 function normalizeTrain(v: unknown): TrainMode {
   const s = asStr(v, '').toLowerCase();
-  if (s === 'note' || s === '认音') return 'note';
+  if (s === 'note' || s === '视奏' || s === '认音') return 'note';
   if (s === 'piece' || s === '曲目' || s === 'song') return 'piece';
   return 'sig';
 }

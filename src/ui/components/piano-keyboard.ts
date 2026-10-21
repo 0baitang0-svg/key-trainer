@@ -1,8 +1,10 @@
 /**
- * SVG 钢琴键盘组件：1.5 八度触控视窗（10 白 7 黑，C 起 17 键）。
- * 触控重设计：白键 36 单位（375px 屏≈32 CSS px）、黑键 22 单位（≈20 px），
+ * SVG 钢琴键盘组件：触控视窗（std = 1.5 八度 10 白 7 黑；wide = 2 八度 14 白 10 黑）。
+ * 触控重设计：白键 36 单位（std 375px 屏≈32 CSS px）、黑键 22 单位（≈20 px），
  * 黑键热区左右 +6 / 下方 +12 盖住白键缝隙且命中优先；点滑连续选择、按压反馈、
  * 八度切换（‹ › 按钮 + 键盘左右边缘 24px 内水平滑动翻页）。
+ * 视奏作答走 pressMode 独立手势分支（多指并发按下/抬起，不进 toggle/点滑路径）；
+ * ensureRange 出题时把视窗平移到覆盖目标区间的 C 对齐窗口。
  * 标记（target/selected/correct/wrong/ghost）、键底小字标签沿用原体系。
  * midi↔音名换算与 audio/melody-synth.ts 的 noteToMidi 一致（C4=60）。
  */
@@ -38,6 +40,8 @@ export interface KeyboardOptions {
    * 缺省时默认 C2–C6（起点 36..84 步进 12，限幅）。
    */
   octaves?: number;
+  /** 视窗几何：std=1.5 八度（缺省，零回归）；wide=2 八度满宽（视奏用） */
+  view?: KeyboardView;
   marks?: KeyMark[];
   /** 键底小字：音名 / 音级（需 tonic+scale）/ 变化记号 */
   labels?: 'none' | 'degree' | 'noteName' | 'alteration';
@@ -45,6 +49,15 @@ export interface KeyboardOptions {
   scale?: 'maj' | 'harmMin' | 'melMin';
   interactive?: boolean;
   onToggle?: (midi: number, on: boolean) => void;
+  /**
+   * 视奏作答手势（独立分支，多指并发）：按下/抬起只上报，不进 toggle 选中态，
+   * 也不走点滑连选。onPress 缺省时内部播单音反馈。
+   */
+  pressMode?: boolean;
+  /** 按下发声回调（缺省内部调 melody-synth 单音） */
+  onPress?: (midi: number) => void;
+  onPressDown?: (midi: number) => void;
+  onPressUp?: (midi: number) => void;
   /** 八度（视窗）切换回调 */
   onViewChange?: (view: { startMidi: number; endMidi: number }) => void;
 }
@@ -61,35 +74,72 @@ export interface PianoKeyboard {
   getViewRange(): { startMidi: number; endMidi: number };
   /** 切换八度：+1 下一个 / -1 上一个（限幅），返回是否真的切换 */
   shiftOctave(dir: number): boolean;
+  /**
+   * 保证 [loMidi,hiMidi] 在视窗内：不在则平移到覆盖该区间的 C 对齐窗口
+   * （clamp C2–C6）并重绘；返回是否发生了移动。
+   */
+  ensureRange(loMidi: number, hiMidi: number): boolean;
   /** 八度指示旁提示（如「其他八度已选 N 键」），null 隐藏 */
   setHint(text: string | null): void;
   destroy(): void;
 }
 
-/* ---------- 几何常量（viewBox 单位） ---------- */
+/* ---------- 几何常量（viewBox 单位）：按视窗查表 ---------- */
 
-export const KEY_GEOMETRY = {
-  /** 白键宽：375px 屏上 ≈32 CSS px（360px 屏宽时 36 CSS px） */
-  WHITE_W: 36,
-  WHITE_H: 110,
-  BLACK_W: 22,
-  BLACK_H: 68,
-  VIEW_H: 130,
-  /** 视窗白键数（1.5 八度） */
-  VIEW_WHITE: 10,
-  /** 视窗黑键数 */
-  VIEW_BLACK: 7,
-  /** 视窗总键数 */
-  VIEW_KEYS: 17,
-  /** viewBox 宽 = 10 × 36 */
-  VIEW_W: 360,
-  /** 黑键中心相对白键缝隙的右移 */
-  BLACK_DX: 3,
-  /** 黑键热区左右外扩 */
-  HIT_PAD_X: 6,
-  /** 黑键热区下延（盖住白键缝隙） */
-  HIT_PAD_BOTTOM: 12,
+export const GEOMETRY = {
+  /** std：1.5 八度触控视窗（10 白 7 黑），375px 屏白键 ≈32 CSS px */
+  std: {
+    /** 白键宽：375px 屏上 ≈32 CSS px（360px 屏宽时 36 CSS px） */
+    WHITE_W: 36,
+    WHITE_H: 110,
+    BLACK_W: 22,
+    BLACK_H: 68,
+    VIEW_H: 130,
+    /** 视窗白键数（1.5 八度） */
+    VIEW_WHITE: 10,
+    /** 视窗黑键数 */
+    VIEW_BLACK: 7,
+    /** 视窗总键数 */
+    VIEW_KEYS: 17,
+    /** viewBox 宽 = 10 × 36 */
+    VIEW_W: 360,
+    /** 黑键中心相对白键缝隙的右移 */
+    BLACK_DX: 3,
+    /** 黑键热区左右外扩 */
+    HIT_PAD_X: 6,
+    /** 黑键热区下延（盖住白键缝隙） */
+    HIT_PAD_BOTTOM: 12,
+  },
+  /** wide：2 八度满宽视窗（14 白 10 黑，2-3-2 黑键分组），横屏键宽 ≈61px / 键高 ≈100px */
+  wide: {
+    WHITE_W: 36,
+    WHITE_H: 62,
+    BLACK_W: 22,
+    BLACK_H: 40,
+    VIEW_H: 76,
+    VIEW_WHITE: 14,
+    VIEW_BLACK: 10,
+    /** 2 八度 24 键 */
+    VIEW_KEYS: 24,
+    /** viewBox 宽 = 14 × 36 */
+    VIEW_W: 504,
+    BLACK_DX: 3,
+    HIT_PAD_X: 6,
+    HIT_PAD_BOTTOM: 12,
+  },
 } as const;
+
+export type KeyboardView = keyof typeof GEOMETRY;
+
+type KeyGeometry = (typeof GEOMETRY)[KeyboardView];
+
+/** 按视窗取几何（缺省 std） */
+export function keyGeometry(view: KeyboardView = 'std'): KeyGeometry {
+  return GEOMETRY[view];
+}
+
+/** 兼容导出：缺省（std）视窗几何，现值与原 KEY_GEOMETRY 一致 */
+export const KEY_GEOMETRY = GEOMETRY.std;
 
 /* ---------- midi ↔ 音名 ---------- */
 
@@ -131,9 +181,9 @@ export function pianoKeyDefs(startMidi: number, octaves: number): PianoKeyDef[] 
   return defs;
 }
 
-/** 视窗键定义：startMidi 起 1.5 八度 17 键（10 白 7 黑） */
-export function viewportKeyDefs(startMidi: number): PianoKeyDef[] {
-  return pianoKeyDefs(startMidi, 2).slice(0, KEY_GEOMETRY.VIEW_KEYS);
+/** 视窗键定义：startMidi 起按视窗取键数（std=17 键 10 白 7 黑；wide=24 键 2 八度） */
+export function viewportKeyDefs(startMidi: number, view: KeyboardView = 'std'): PianoKeyDef[] {
+  return pianoKeyDefs(startMidi, 2).slice(0, keyGeometry(view).VIEW_KEYS);
 }
 
 /* ---------- 命中矩形（可测性） ---------- */
@@ -160,8 +210,8 @@ function whiteIndexOf(midi: number, startMidi: number): number {
  * 键命中矩形（viewBox 单位）：白键 = 键面；
  * 黑键热区左右各 +6、下方 +12，盖住白键缝隙并压在白键之上（命中优先）。
  */
-export function keyHitRect(midi: number, startMidi: number): KeyHitRect {
-  const K = KEY_GEOMETRY;
+export function keyHitRect(midi: number, startMidi: number, view: KeyboardView = 'std'): KeyHitRect {
+  const K = keyGeometry(view);
   const def = midiToKeyDef(midi);
   const wi = whiteIndexOf(midi, startMidi);
   if (!def.isBlack) {
@@ -182,6 +232,28 @@ export function keyHitRect(midi: number, startMidi: number): KeyHitRect {
     height: K.BLACK_H + K.HIT_PAD_BOTTOM,
     isBlack: true,
   };
+}
+
+/* ---------- 视窗对齐（ensureRange 的纯计算） ---------- */
+
+/**
+ * 覆盖 [loMidi,hiMidi] 的 C 对齐视窗起点。
+ * 区间已在当前视窗（viewStart 起 keys 键）→ null（不移）；
+ * 否则取含 loMidi 的 C 窗口，放不下时右移到含 hiMidi 的 C 窗口，
+ * 最后 clamp 到 [minStart,maxStart]（缺省 C2–C6 起点 36..84）。
+ */
+export function cWindowStart(
+  loMidi: number,
+  hiMidi: number,
+  viewStart: number,
+  keys: number,
+  minStart = 36,
+  maxStart = 84,
+): number | null {
+  if (loMidi >= viewStart && hiMidi <= viewStart + keys - 1) return null;
+  let start = Math.floor(loMidi / 12) * 12;
+  if (hiMidi > start + keys - 1) start = Math.floor((hiMidi - (keys - 1)) / 12) * 12;
+  return Math.min(maxStart, Math.max(minStart, start));
 }
 
 /* ---------- 标签 ---------- */
@@ -283,6 +355,8 @@ interface Gesture {
 export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
   const initialStart = opts.startMidi ?? 48;
   const gradId = `pk-black-${++gradSeq}`;
+  const view: KeyboardView = opts.view ?? 'std';
+  const G = keyGeometry(view);
   // 八度切换范围：octaves 给定按旧跨度推导，缺省默认 C2–C6（限幅）
   const minStart = opts.octaves !== undefined ? initialStart : 36;
   const maxStart = opts.octaves !== undefined ? initialStart + (opts.octaves - 1) * 12 : 84;
@@ -292,9 +366,11 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
   let disabled = false;
   let refs: KeyRefs[] = [];
   let gesture: Gesture | null = null;
+  /** pressMode：pointerId → 按下的键（多指并发，独立于 gesture 单指锁） */
+  const pointers = new Map<number, number>();
 
   const svg = svgEl('svg', {
-    viewBox: `0 0 ${KEY_GEOMETRY.VIEW_W} ${KEY_GEOMETRY.VIEW_H}`,
+    viewBox: `0 0 ${G.VIEW_W} ${G.VIEW_H}`,
     class: opts.interactive ? 'piano is-interactive' : 'piano',
     role: 'group',
     'aria-label': '钢琴键盘',
@@ -352,8 +428,8 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
   }
 
   function buildKey(def: PianoKeyDef): KeyRefs {
-    const K = KEY_GEOMETRY;
-    const hitRect = keyHitRect(def.midi, viewStart);
+    const K = G;
+    const hitRect = keyHitRect(def.midi, viewStart, view);
     const faceX = def.isBlack ? hitRect.x + K.HIT_PAD_X : hitRect.x;
     const faceW = def.isBlack ? K.BLACK_W : K.WHITE_W;
     const faceH = def.isBlack ? K.BLACK_H : K.WHITE_H;
@@ -408,7 +484,7 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
   }
 
   function render(): void {
-    const defs = viewportKeyDefs(viewStart);
+    const defs = viewportKeyDefs(viewStart, view);
     svg.replaceChildren();
     appendKeyDefs(svg, gradId);
     refs = [];
@@ -416,6 +492,7 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
     for (const def of defs) if (!def.isBlack) refs.push(buildKey(def));
     for (const def of defs) if (def.isBlack) refs.push(buildKey(def));
     applyMarks();
+    if (opts.pressMode) refreshPressed();
     rangeEl.textContent = `${keyDefName(defs[0], true)}–${keyDefName(defs[defs.length - 1], true)}`;
     updateBar();
   }
@@ -475,6 +552,40 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
     for (const r of refs) r.g.classList.toggle('is-pressed', midi !== null && r.def.midi === midi);
   }
 
+  /* ---------- 视奏作答：多指按下（独立分支，不进 toggle / 点滑路径） ---------- */
+
+  /** 按 pointers 集合恢复多键下沉视觉（重绘后也调用） */
+  function refreshPressed(): void {
+    const on = new Set(pointers.values());
+    for (const r of refs) r.g.classList.toggle('is-pressed', on.has(r.def.midi));
+  }
+
+  function pressDown(e: PointerEvent): void {
+    if (disabled || !opts.interactive) return;
+    const midi = midiFromEventTarget(e);
+    if (midi === null) return;
+    e.preventDefault();
+    try {
+      svg.setPointerCapture(e.pointerId);
+    } catch {
+      // 指针捕获不可用时走 window 监听兜底
+    }
+    pointers.set(e.pointerId, midi);
+    refreshPressed();
+    if (opts.onPress) opts.onPress(midi);
+    else playKeyNote(midi);
+    void haptic('light');
+    opts.onPressDown?.(midi);
+  }
+
+  function pressUp(e: PointerEvent): void {
+    const midi = pointers.get(e.pointerId);
+    if (midi === undefined) return;
+    pointers.delete(e.pointerId);
+    refreshPressed();
+    opts.onPressUp?.(midi);
+  }
+
   /* ---------- 手势：点选 / 点滑 / 边缘翻八度 ---------- */
 
   function midiFromEventTarget(e: PointerEvent): number | null {
@@ -489,6 +600,10 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
   }
 
   function onPointerDown(e: PointerEvent): void {
+    if (opts.pressMode) {
+      pressDown(e);
+      return;
+    }
     if (disabled || !opts.interactive || gesture !== null) return;
     const midi = midiFromEventTarget(e);
     const rect = svg.getBoundingClientRect();
@@ -546,8 +661,20 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
     gesture = null;
   }
 
-  const onPointerUp = (e: PointerEvent): void => endGesture(e, true);
-  const onPointerCancel = (e: PointerEvent): void => endGesture(e, false);
+  const onPointerUp = (e: PointerEvent): void => {
+    if (opts.pressMode) {
+      pressUp(e);
+      return;
+    }
+    endGesture(e, true);
+  };
+  const onPointerCancel = (e: PointerEvent): void => {
+    if (opts.pressMode) {
+      pressUp(e);
+      return;
+    }
+    endGesture(e, false);
+  };
 
   if (opts.interactive) {
     svg.addEventListener('pointerdown', onPointerDown);
@@ -559,12 +686,22 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
   /* ---------- 八度切换 ---------- */
 
   function getViewRange(): { startMidi: number; endMidi: number } {
-    return { startMidi: viewStart, endMidi: viewStart + KEY_GEOMETRY.VIEW_KEYS - 1 };
+    return { startMidi: viewStart, endMidi: viewStart + G.VIEW_KEYS - 1 };
   }
 
   function shiftOctave(dir: number): boolean {
     const next = Math.min(maxStart, Math.max(minStart, viewStart + dir * 12));
     if (next === viewStart) return false;
+    viewStart = next;
+    setPressed(null);
+    render();
+    opts.onViewChange?.(getViewRange());
+    return true;
+  }
+
+  function ensureRange(loMidi: number, hiMidi: number): boolean {
+    const next = cWindowStart(loMidi, hiMidi, viewStart, G.VIEW_KEYS, minStart, maxStart);
+    if (next === null || next === viewStart) return false;
     viewStart = next;
     setPressed(null);
     render();
@@ -596,6 +733,7 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
     },
     getViewRange,
     shiftOctave,
+    ensureRange,
     setHint(text: string | null): void {
       hintText.textContent = text ?? '';
       hintEl.hidden = text === null;
@@ -608,6 +746,7 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
         window.removeEventListener('pointercancel', onPointerCancel);
       }
       gesture = null;
+      pointers.clear();
       root.remove();
     },
   };

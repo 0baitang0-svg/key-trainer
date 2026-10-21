@@ -2479,3 +2479,151 @@ svg.piano.is-interactive {
     }
   }
 }
+
+/* ---------- 视奏：滚动谱面视窗 / 拍点状态 / 底部进度 ---------- */
+
+/* 外层视窗：overflow hidden；内层长谱 svg 由 seq-stage 按视窗高显式定宽后平移 */
+.seq-viewport {
+  position: relative;
+  overflow: hidden;
+  height: calc(156px * var(--fs));
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  background: var(--glass-2);
+  box-shadow: var(--shadow), var(--glass-rim);
+}
+
+.seq-viewport svg.seq-staff {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  max-width: none;
+}
+
+/* 拍点状态：当前 accent 描边 / 通过绿 / 错过红（CSS 覆盖 SVG 填充属性） */
+.seq-staff .qnote.is-cur .notehead {
+  stroke: var(--accent);
+  stroke-width: 1.8;
+}
+
+.seq-staff .qnote.is-done .notehead,
+.seq-staff .qnote.is-done .stem,
+.seq-staff .qnote.is-done .note-acc path {
+  fill: var(--good);
+}
+
+.seq-staff .qnote.is-done line.ledger {
+  stroke: var(--good);
+}
+
+.seq-staff .qnote.is-miss .notehead,
+.seq-staff .qnote.is-miss .stem,
+.seq-staff .qnote.is-miss .note-acc path {
+  fill: var(--bad);
+}
+
+.seq-staff .qnote.is-miss line.ledger {
+  stroke: var(--bad);
+}
+
+/* 底部进度条（--p 宽百分比）+「第 i/n 拍」小字，绝对叠在视窗底缘 */
+.seq-progress {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.seq-progress__bar {
+  position: relative;
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--glass-2);
+  border: 1px solid var(--glass-line);
+  overflow: hidden;
+}
+
+.seq-progress__bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--p, 0%);
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.seq-progress__text {
+  font-size: calc(11px * var(--fs));
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 视奏 / 键盘动效（reduced-motion 全部停用） ---------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* 谱面平移：goTo 200ms 滑动；freeze 时 seq-stage 内联 transition:none 盖过本条 */
+  .seq-viewport svg.seq-staff {
+    transition: transform 200ms ease-out;
+  }
+
+  .seq-staff .qnote .notehead,
+  .seq-staff .qnote .stem {
+    transition: fill 180ms ease;
+  }
+
+  .seq-progress__bar::after {
+    transition: width 200ms ease;
+  }
+}
+
+/* ---------- 横屏（仅 landscape 生效，竖屏行为零变化） ---------- */
+
+@media (orientation: landscape) {
+  /* 其余屏：加宽兜底、居中 */
+  .screen:not(.screen--session) {
+    max-width: 560px;
+    margin-inline: auto;
+  }
+
+  /* 训练屏两段式：上 = 谱面（固定高），下 = 键盘区（固定高），中间不留 hint */
+  .screen--session {
+    max-width: none;
+  }
+
+  .session__stage {
+    justify-content: flex-start;
+    gap: 8px;
+    overflow: hidden;
+  }
+
+  .session__stage .seq-viewport {
+    height: clamp(110px, 38vh, 170px);
+    flex: 0 0 auto;
+  }
+
+  .session__stage .prompt {
+    font-size: calc(14px * var(--fs));
+    padding-top: 2px;
+  }
+
+  .session__hint {
+    display: none;
+  }
+
+  .session__pad[data-layout='seq'] {
+    flex: 0 0 auto;
+  }
+
+  .session__pad[data-layout='seq'] svg.piano {
+    height: clamp(76px, 22vh, 120px);
+  }
+}

@@ -4,7 +4,7 @@
 
 import { h, icon, fmtMs, fmtPct, todayKey } from '../dom';
 import type { AppContext, ScreenInstance } from '../router';
-import { staffView } from '../components/staff-view';
+import { staffOptionsFor, staffView } from '../components/staff-view';
 import { mascot, type Mascot, type MascotMood } from '../components/mascot';
 import { showCoachOnce } from '../components/coach-mark';
 import { BADGES, checkBadges } from '../../content/badges';
@@ -271,6 +271,22 @@ export function resultScreen(ctx: AppContext, params: unknown): ScreenInstance {
 function reviewRow(rec: QuestionRecord, index: number): HTMLElement {
   const q = rec.question;
   const detail = h('div', { className: 'review__detail' });
+  // 视奏（note）串明细：全对 → 「16/16」；有错 → 「14/16 · 首错#9」
+  const seqLine =
+    rec.seqTotal !== undefined
+      ? rec.skipped
+        ? `跳过 · 共 ${rec.seqTotal} 拍`
+        : rec.ok
+          ? `${rec.seqTotal}/${rec.seqTotal}`
+          : `${rec.seqTotal - (rec.seqErrors ?? 0)}/${rec.seqTotal} · 首错#${(rec.firstErrIdx ?? 0) + 1}`
+      : null;
+  const answerText = seqLine
+    ? seqLine
+    : rec.skipped
+      ? `— → ${rec.correctLabel}`
+      : rec.ok
+        ? rec.correctLabel
+        : `${rec.picked ?? '—'} → ${rec.correctLabel}`;
   const head = h(
     'button',
     {
@@ -285,24 +301,14 @@ function reviewRow(rec: QuestionRecord, index: number): HTMLElement {
     },
     h('span', { className: 'review__no', text: `#${index + 1}` }),
     h('span', { className: 'review__verdict', text: rec.skipped ? '跳过' : rec.ok ? '对' : '错' }),
-    h('span', {
-      className: 'review__answer',
-      text: rec.skipped
-        ? `— → ${rec.correctLabel}`
-        : rec.ok
-          ? rec.correctLabel
-          : `${rec.picked ?? '—'} → ${rec.correctLabel}`,
-    }),
+    h('span', { className: 'review__answer', text: answerText }),
     h('span', { className: 'review__rt', text: fmtMs(rec.reactionMs) }),
     rec.favorite ? h('span', { className: 'review__fav', text: '收藏' }) : null,
   );
+  const accent = anchorAccent(q, rec.firstErrIdx);
   detail.append(
     staffView({
-      clef: q.clef,
-      type: q.type,
-      n: q.n,
-      ...(q.train === 'note' && q.step !== undefined ? { step: q.step } : {}),
-      ...(anchorAccent(q) !== undefined ? { accent: anchorAccent(q) as number } : {}),
+      ...staffOptionsFor(q, accent, rec.firstErrIdx),
       mini: true,
       className: 'staff-card--anchor',
     }),

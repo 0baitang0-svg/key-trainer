@@ -4,6 +4,7 @@
 
 import { audioEngine } from './engine';
 import { T_LET, T_OCT } from '../core/music-theory';
+import { letterAccOctToMidi } from '../core/seq-generator';
 
 /** 旋律音符：给 letter+oct+acc，或给谱面 step（按高音谱号解读） */
 export interface SynthNote {
@@ -19,13 +20,9 @@ export interface SynthNote {
   dur: number;
 }
 
-const LETTER_SEMI: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
-
-/** 音名 → MIDI 号 */
+/** 音名 → MIDI 号（逻辑已迁移至 core/seq-generator.letterAccOctToMidi，保留原签名） */
 export function noteToMidi(letter: string, oct: number, acc = 0): number {
-  const semi = LETTER_SEMI[letter.toUpperCase()];
-  if (semi === undefined) throw new RangeError(`未知音名 ${letter}`);
-  return (oct + 1) * 12 + semi + acc;
+  return letterAccOctToMidi(letter, oct, acc);
 }
 
 /** MIDI 号 → 频率（A4=440Hz，十二平均律） */

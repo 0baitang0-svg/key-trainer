@@ -293,7 +293,7 @@ export function buildDailyPlan(cfg: DailyPlanConfig = {}, stats?: PlanStats): Pl
   const weak = stats !== undefined && stats.accuracy !== null && stats.accuracy < 0.8;
   const plan: PlanBlock[] = [
     { kind: 'warmup', minutes: 1, focus: '热身：最近练过的调号快问快答' },
-    { kind: 'main', minutes: weak ? 3 : 2, focus: `主节：${train === 'note' ? '认音' : train === 'piece' ? '曲目认调' : isChordMode(train) ? '和弦反应' : '认调'}自适应抽题` },
+    { kind: 'main', minutes: weak ? 3 : 2, focus: `主节：${train === 'note' ? '视奏' : train === 'piece' ? '曲目认调' : isChordMode(train) ? '和弦反应' : '认调'}自适应抽题` },
   ];
   if (cfg.hasLevel !== false) {
     plan.push({ kind: 'level', minutes: 2, levelId: cfg.levelId, focus: '曲目关卡：跟着名曲巩固调号' });

@@ -321,7 +321,7 @@ export interface WeakSpot {
 /** 训练模式中文名（弱项描述用） */
 const WEAK_TRAIN_LABELS: Record<string, string> = {
   sig: '认调',
-  note: '认音',
+  note: '视奏',
   piece: '曲目认调',
   func: '和弦归属',
   diatonic: '顺阶和弦',

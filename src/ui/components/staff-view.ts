@@ -16,13 +16,14 @@ export interface StaffViewOptions extends StaffOptions {
   className?: string;
 }
 
-const LETTERS = 'ABCDEFG';
+const LETTERS = 'CDEFGAB';
 
-/** 音名 + 八度 → 谱面 step（0=第1线，高音 E4 / 低音 G2 为基准） */
+/** 音名 + 八度 → 谱面 step（0=第1线，高音 E4 / 低音 G2 为基准）
+ *  绝对音级坐标 d = oct*7 + 字母序(C=0…B=6)，与 seq-generator 同款，
+ *  A/B 起始（根音）不再差八度。 */
 function staffStepOf(p: PitchName, oct: number, clef: 'treble' | 'bass'): number {
-  const li = LETTERS.indexOf(p.letter);
-  const base = clef === 'treble' ? { li: 4, oct: 4 } : { li: 6, oct: 2 };
-  return (oct - base.oct) * 7 + li - base.li;
+  const d = oct * 7 + LETTERS.indexOf(p.letter);
+  return d - (clef === 'treble' ? 4 * 7 + 2 : 2 * 7 + 4);
 }
 
 /** 和弦 → 谱面堆叠符头（root 起字母步进上行，跨字母升八度） */
@@ -41,10 +42,17 @@ function chordStaffNotes(spec: ChordSpec, clef: 'treble' | 'bass'): StaffNote[] 
   return out;
 }
 
-/** 由题目推出谱面参数（认音题带目标音符；和弦题传 notes 堆叠 + chordSymbolText） */
-export function staffOptionsFor(q: Question, accent?: number): StaffOptions {
+/**
+ * 由题目推出谱面参数（视奏题带首错/首拍符头；和弦题传 notes 堆叠 + chordSymbolText）。
+ * @param firstErrIdx 视奏题回顾用：首错拍（0 起；缺省或负数显示首拍）
+ */
+export function staffOptionsFor(q: Question, accent?: number, firstErrIdx?: number): StaffOptions {
   const base: StaffOptions = { clef: q.clef, type: q.type, n: q.n };
-  if (q.train === 'note' && q.step !== undefined) base.step = q.step;
+  if (q.train === 'note') {
+    const idx = firstErrIdx !== undefined && firstErrIdx >= 0 ? firstErrIdx : 0;
+    const step = q.seq?.notes[idx]?.step ?? q.step;
+    if (step !== undefined) base.step = step;
+  }
   if (accent !== undefined) base.accent = accent;
   const cq = q.cq;
   if (cq?.chord) {

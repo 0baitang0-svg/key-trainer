@@ -159,7 +159,7 @@ export function homeScreen(ctx: AppContext): ScreenInstance {
 
   const foldBody = h('div', { className: 'fold__body' }, seg('题型', [
     { value: 'sig', label: '认调' },
-    { value: 'note', label: '认音' },
+    { value: 'note', label: '视奏' },
     { value: 'mix', label: '混合' },
     { value: 'func', label: '和弦归属' },
     { value: 'diatonic', label: '顺阶和弦' },

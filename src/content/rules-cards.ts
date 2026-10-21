@@ -4,7 +4,7 @@
  */
 
 import { anchorText, keyInfo, type Ask, type SigType } from '../core/music-theory';
-import type { ChordQ } from '../core/question-generator';
+import type { ChordQ, Question } from '../core/question-generator';
 
 export interface RuleCard {
   id: string;
@@ -119,4 +119,32 @@ export function firstSeenChord(cq: ChordQ): RuleCard {
   if (cq.scale === 'harmMin') return HARM_MIN_CARD;
   if (cq.scale === 'melMin') return MEL_MIN_CARD;
   return FUNC_CARD;
+}
+
+/* ---------- 视奏（note）微课卡（id 前缀 `rcq|`） ---------- */
+
+/** 临时记号按小节生效卡（视奏串带连续临时记号考点时首遇） */
+export const SEQ_BAR_CARD: RuleCard = {
+  id: chordRuleCardId('bar'),
+  title: '临时记号按小节生效',
+  lines: ['画了记号后同小节同字母延续、新小节恢复调号（♮ 表示还原）。'],
+  example: '例：本小节 F 画了 ♯，同小节后面的 F 都弹 ♯；跨过小节线就回到调号原样。',
+};
+
+/** 调号只在谱面最左卡（视奏串低档首遇） */
+export const SEQ_SCROLL_CARD: RuleCard = {
+  id: chordRuleCardId('scroll'),
+  title: '调号只在谱面最左',
+  lines: ['调号只在谱面最左——开弹前 3 秒记住它，弹远了就看不见了。'],
+  example: '例：看到 3 个降号（B♭ E♭ A♭）先默念一遍，再开始弹。',
+};
+
+/**
+ * 视奏（note）题首遇微课卡：由 q.seq 的难度档决定——
+ * accPerBar ≥ 1（T2 起，串里必有临时记号考点）→ 记号按小节卡；
+ * 低档（T0/T1）→ 调号在最左卡。
+ */
+export function firstSeenSeq(q: Question): RuleCard {
+  const acc = q.seqProfile?.accPerBar ?? 0;
+  return acc >= 1 ? SEQ_BAR_CARD : SEQ_SCROLL_CARD;
 }

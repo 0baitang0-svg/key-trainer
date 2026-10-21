@@ -7,14 +7,12 @@
 import {
   anchorText,
   keyInfo,
-  noteInfo,
   FL_MAJ,
   FL_MIN,
   MAJ_GRID,
   MIN_GRID,
   SH_MAJ,
   SH_MIN,
-  WORD,
   type Ask,
   type Clef,
   type SigType,
@@ -46,6 +44,14 @@ import {
   type ScaleKind,
 } from './scale-theory';
 import { itemKey, type ItemStat, type StatsState, totalSamples } from './stats';
+import {
+  generateSeq,
+  seqProfileByCode,
+  seqProfileCode,
+  seqProfileOf,
+  type PlaySeq,
+  type SeqProfile,
+} from './seq-generator';
 import { findPiece } from '../content/repertoire';
 
 export type TrainMode = 'sig' | 'note' | 'piece' | 'func' | 'diatonic' | 'degrees' | 'build';
@@ -88,19 +94,25 @@ export interface Question {
   clef: Clef;
   /** 问大调还是小调 */
   ask: Ask;
-  /** note 模式目标音位置 0..8（0=第1线 … 8=第5线） */
+  /** note 模式目标音位置 0..8（0=第1线 … 8=第5线；三选时代遗留，视奏题回炉兼容用） */
   step?: number;
   /** piece 模式曲目 id */
   pieceId?: string;
   /** piece 模式玩法：听辨认调 / 看谱认调 / 情境认音 */
   pieceKind?: PieceKind;
+  /** 视奏串（note 题专用：逐拍判题目标） */
+  seq?: PlaySeq;
+  /** 视奏串随机种子（进错题 key 第 9 段，同 seed 同 profile 确定性重建同串） */
+  seqSeed?: number;
+  /** 视奏难度档（进错题 key 第 9 段的 profileCode） */
+  seqProfile?: SeqProfile;
   /** 和弦反应题（func / diatonic / degrees / build） */
   cq?: ChordQ;
   /** 作答交互：选项 / 键盘点选 / 键盘拼和弦 */
   answerInput?: 'options' | 'keyboard-tap' | 'keyboard-build';
   /** 是否来自错题队列 */
   fromReview?: boolean;
-  /** 打乱后的作答选项（认调=调名，note 模式=原位/升/降） */
+  /** 打乱后的作答选项（认调=调名；视奏 note 题无选项，返回 []） */
   options: string[];
 }
 
@@ -177,11 +189,39 @@ export function chordItemExtra(kind: QKind, scale?: ScaleKind): string {
 
 /**
  * 题目 key：train|type|n|clef|ask|step|pieceId|pieceKind（缺省段留空）；
- * 和弦题追加第 9 段 `qkind~tonic~scale~degree~chordSymbol`。
+ * 和弦题追加第 9 段 `qkind~tonic~scale~degree~chordSymbol`；
+ * 视奏（note）题追加第 9 段 `play~{seed}~{len}.{span}.{bar}.{acc}.{duo}`。
  */
 export function questionKey(q: Question): string {
   const base = [q.train, q.type, q.n, q.clef, q.ask, q.step ?? '', q.pieceId ?? '', q.pieceKind ?? ''].join('|');
-  return q.cq ? `${base}|${chordKeyPart(q.cq)}` : base;
+  if (q.cq) return `${base}|${chordKeyPart(q.cq)}`;
+  const np = noteKeyPart(q);
+  return np !== null ? `${base}|${np}` : base;
+}
+
+/** note 题第 9 段：`play~{seed}~{profileCode}`（无 seed 的旧题返回 null） */
+function noteKeyPart(q: Question): string | null {
+  if (q.seqSeed === undefined) return null;
+  const code = seqProfileCode(q.seqProfile ?? seqProfileOf(undefined, 0));
+  return `play~${q.seqSeed}~${code}`;
+}
+
+/** 生成视奏串挂到题目（seed → profile → 同 seed 同 profile 必然同串） */
+function attachSeq(q: Question, profile: SeqProfile, seed: number): Question {
+  q.seqSeed = seed >>> 0;
+  q.seqProfile = profile;
+  q.seq = generateSeq({ type: q.type, n: q.n, clef: q.clef, profile, rng: makeRng(q.seqSeed) });
+  return q;
+}
+
+/** 旧 key 字符串 hash 成 seed（FNV-1a，错题回炉兼容三选时代的 note key） */
+function hashSeed(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
 }
 
 let seq = 0;
@@ -192,7 +232,7 @@ function nextId(): string {
 
 /** 从错题 key 还原题目（fromReview=true，options 重新生成） */
 export function questionFromKey(key: string, rng: Rng = Math.random): Question {
-  const [train, type, n, clef, ask, step, pieceId, pieceKind, chordPart] = key.split('|');
+  const [train, type, n, clef, ask, step, pieceId, pieceKind, ninth] = key.split('|');
   const q: Question = {
     id: nextId(),
     train: train as TrainMode,
@@ -206,8 +246,20 @@ export function questionFromKey(key: string, rng: Rng = Math.random): Question {
   if (step !== undefined && step !== '') q.step = Number(step);
   if (pieceId !== undefined && pieceId !== '') q.pieceId = pieceId;
   if (pieceKind !== undefined && pieceKind !== '') q.pieceKind = pieceKind as PieceKind;
-  if (chordPart !== undefined && chordPart !== '') {
-    q.cq = parseChordKeyPart(chordPart);
+  if (q.train === 'note') {
+    // 视奏题：`play~` 段同 seed 同 profile 确定性重建；旧三选 key（step 段）忽略 step，
+    // 用旧 key 字符串 hash 成 seed 重建为 play 题（错题回炉不炸）
+    const part = ninth ?? '';
+    if (part.startsWith('play~')) {
+      const [, seedStr, code] = part.split('~');
+      const seed = Number(seedStr);
+      attachSeq(q, (code !== undefined ? seqProfileByCode(code) : null) ?? seqProfileOf(undefined, 0), Number.isFinite(seed) ? seed : hashSeed(key));
+    } else {
+      delete q.step;
+      attachSeq(q, seqProfileOf(undefined, 0), hashSeed(key));
+    }
+  } else if (ninth !== undefined && ninth !== '') {
+    q.cq = parseChordKeyPart(ninth);
     q.answerInput = answerInputOf(q.cq.kind);
   }
   q.options = buildOptions(q, rng);
@@ -216,32 +268,10 @@ export function questionFromKey(key: string, rng: Rng = Math.random): Question {
 
 /* ---------- 选项生成 ---------- */
 
-/** note 模式固定选项（判定用 noteInfo().acc） */
-export interface NoteChoice {
-  /** 调号带来的实际记号 */
-  a: 1 | 0 | -1;
-  /** 记号字形 */
-  g: '♮' | '♯' | '♭';
-  /** 文字 */
-  t: string;
-}
-
-export const NOTE_OPTIONS: readonly NoteChoice[] = [
-  { a: 0, g: '♮', t: '原位' },
-  { a: 1, g: '♯', t: '升' },
-  { a: -1, g: '♭', t: '降' },
-];
-
-/** note 模式选项文案（固定顺序） */
-export const NOTE_LABELS: readonly string[] = NOTE_OPTIONS.map((o) => o.g + o.t);
-
-/** 认调题正确答案文案（大调 / 小调名） */
+/** 认调题正确答案文案（大调 / 小调名；视奏题为「弹完即可」） */
 export function correctLabelOf(q: Question): string {
+  if (q.train === 'note') return '弹完即可';
   if (q.cq !== undefined) return chordCorrectLabel(q.cq);
-  if (q.train === 'note') {
-    const want = q.step === undefined ? 0 : noteInfo(q.step, q.type, q.n, q.clef).acc;
-    return NOTE_LABELS[NOTE_OPTIONS.findIndex((o) => o.a === want)];
-  }
   const info = keyInfo(q.type, q.n);
   return q.ask === 'maj' ? info.maj : info.min;
 }
@@ -292,12 +322,12 @@ function shuffle<T>(arr: T[], rng: Rng): T[] {
 
 /**
  * 生成作答选项：
- * - note 模式：固定「原位 / 升 / 降」
+ * - note（视奏）模式：无选项（键盘逐拍作答），返回 []
  * - 认调（sig/piece）：正确答案 + 3 个干扰项（同为大调或同为小调，优先易混对），打乱返回
  */
 export function buildOptions(q: Question, rng: Rng = Math.random): string[] {
   if (q.cq !== undefined) return chordOptions(q.cq, rng);
-  if (q.train === 'note') return [...NOTE_LABELS];
+  if (q.train === 'note') return [];
   const correct = correctLabelOf(q);
   const pool = (q.ask === 'maj' ? MAJ_GRID : MIN_GRID).filter((l) => l !== correct);
   const scored = pool
@@ -331,33 +361,43 @@ function normalize(s: string): string {
 /**
  * 直读锚点解析：
  * - 认调题：直读口诀（anchorText）
- * - 认音题：「第2线 = G，7 个升号里有它 → G♯（C♯ 大调第 5 级）」
+ * - 视奏（note）题：串级讲评（逐拍失误详情由 controller.submitSequence 走 seqExplain）
  */
 export function explainAnswer(q: Question): string {
   if (q.cq !== undefined) return chordExplain(q.cq);
-  if (q.train !== 'note') return anchorText(q.type, q.n, q.ask);
-  const info = noteInfo(q.step ?? 0, q.type, q.n, q.clef);
-  const sign = info.acc === 1 ? '♯' : info.acc === -1 ? '♭' : '';
-  const heard = `${info.letter}${sign}`;
-  const where =
-    q.n === 0
-      ? `无升降号`
-      : `${q.n} 个${WORD[q.type]}号里${info.acc === 0 ? '没它' : '有它'}`;
-  return `${info.posName} = ${info.letter}，${where} → ${heard}（${keyInfo(q.type, q.n).maj} 大调第 ${info.deg} 级）`;
+  if (q.train === 'note') {
+    const len = q.seq?.notes.length ?? 0;
+    return len > 0 ? `视奏串共 ${len} 拍 · 跟着谱子弹完即可` : '跟着谱子弹完即可';
+  }
+  return anchorText(q.type, q.n, q.ask);
+}
+
+/** 视奏整串作答（controller.submitSequence 产物）：0 错为对 */
+export interface SeqAnswer {
+  /** 错拍数 */
+  errors: number;
 }
 
 /**
  * 判题。
- * @param answer 认调：选项下标或选项文案；note：选项下标或「♮/♯/♭/原位/升/降」文案；
+ * @param answer 认调：选项下标或选项文案；视奏（note）：{errors} 结构（全串判题在
+ *               controller.submitSequence 完成，这里只兜底）；
  *               键盘拼和弦（build-notes）：选中键的 midi 数组（按 pitch class 集合比对）
  */
-export function checkAnswer(q: Question, answer: number | string | readonly number[]): CheckResult {
+export function checkAnswer(q: Question, answer: number | string | readonly number[] | SeqAnswer): CheckResult {
   const correctLabel = correctLabelOf(q);
   const explain = explainAnswer(q);
+  if (q.train === 'note') {
+    let ok = false;
+    if (typeof answer === 'string') ok = normalize(answer) === normalize(correctLabel);
+    else if (!Array.isArray(answer)) ok = (answer as SeqAnswer).errors === 0;
+    return { ok, correctLabel, explain };
+  }
   if (typeof answer !== 'string' && typeof answer !== 'number') {
-    // 键盘拼和弦：midi 数组按 pitch class 集合比对
+    // 键盘拼和弦：midi 数组按 pitch class 集合比对（SeqAnswer 已在 note 分支消费，此处兜底转数组）
     const want = q.cq?.chord ? chordPcSet(q.cq.chord) : [];
-    return { ok: want.length > 0 && samePcSet(answer, want), correctLabel, explain };
+    const midis = Array.isArray(answer) ? answer : [];
+    return { ok: want.length > 0 && samePcSet(midis, want), correctLabel, explain };
   }
   if (q.cq !== undefined) {
     let picked: string | undefined;
@@ -374,11 +414,7 @@ export function checkAnswer(q: Question, answer: number | string | readonly numb
     picked = q.options[answer];
   } else {
     const key = normalize(answer);
-    picked =
-      q.options.find((o) => normalize(o) === key) ??
-      (q.train === 'note'
-        ? NOTE_LABELS.find((l) => normalize(l) === key || normalize(l.slice(1)) === key)
-        : undefined);
+    picked = q.options.find((o) => normalize(o) === key);
   }
   return {
     ok: picked !== undefined && normalize(picked) === normalize(correctLabel),
@@ -403,8 +439,6 @@ export interface PickConfig {
   nMax?: number;
   /** 精确调号池（给了就忽略 types/nMin/nMax，关卡分布用） */
   keys?: ReadonlyArray<{ type: SigType; n: number }>;
-  /** note 模式位置池，默认 0..8 */
-  steps?: number[];
   /** piece 模式候选曲目 */
   pieceIds?: string[];
   /** piece 模式玩法池，默认全部 */
@@ -570,8 +604,10 @@ export function pickQuestion(
     options: [],
   };
   if (c.train === 'note') {
-    const steps = cfg.steps ?? [0, 1, 2, 3, 4, 5, 6, 7, 8];
-    q.step = steps[Math.floor(rng() * steps.length)];
+    // 视奏串：难度档吃统计（ema/样本 → 5 档 profile），seed 进错题 key 保证回炉同串
+    const stat = stats.items[itemKey(c.train, c.type, c.n, c.clef, c.ask)];
+    const profile = seqProfileOf(stat?.emaAccuracy, stat?.attempts ?? 0);
+    attachSeq(q, profile, Math.floor(rng() * 0xffffffff));
   }
   if (c.train === 'piece') {
     q.pieceId = c.pieceId;

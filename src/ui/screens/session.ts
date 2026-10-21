@@ -9,14 +9,23 @@ import { h, icon } from '../dom';
 import type { AppContext, ScreenInstance } from '../router';
 import { answerPad, type AnswerPad } from '../components/answer-pad';
 import { chordInput, type ChordInput } from '../components/chord-input';
-import { pianoKeyboard, pianoKeyDefs, type KeyMark } from '../components/piano-keyboard';
+import {
+  midiToKeyDef,
+  pianoKeyboard,
+  pianoKeyDefs,
+  type KeyboardView,
+  type KeyMark,
+  type PianoKeyboard,
+} from '../components/piano-keyboard';
+import { seqStage, type SeqStage } from '../components/seq-stage';
 import { staffOptionsFor, staffView } from '../components/staff-view';
 import { feedbackBanner, ruleCardSheet, type FeedbackBanner } from '../components/feedback-banner';
 import { showCoachOnce } from '../components/coach-mark';
-import { firstSeen, firstSeenChord } from '../../content/rules-cards';
+import { firstSeen, firstSeenChord, firstSeenSeq } from '../../content/rules-cards';
 import { findPiece } from '../../content/repertoire';
 import { hasSeenFlag, markSeen } from '../../core/store';
 import { findLevel } from '../../core/levels';
+import { judgeStep } from '../../core/seq-generator';
 import {
   CHORD_INTERVALS,
   chordPcSet,
@@ -143,6 +152,50 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   let askCount = 0;
   const timers: number[] = [];
 
+  /* ---------- 视奏（note）判题状态 ---------- */
+
+  /** 当前题（仅视奏题非 null） */
+  let seqQ: Question | null = null;
+  let seqInst: SeqStage | null = null;
+  let seqKb: PianoKeyboard | null = null;
+  /** 当前判题拍点（0 起；= len 时串已完成） */
+  let seqIdx = 0;
+  /** 错拍数（每拍只计一次，14/16 语义） */
+  let seqErrors = 0;
+  let seqFirstErr = -1;
+  /** 当前拍是否已计过错（同拍连错不重复计数） */
+  let seqBeatMissed = false;
+  /** 同拍连错计数（2 错 ghost、3 错强制前进） */
+  let seqMissStreak = 0;
+  /** 首次按下的时间戳（整串耗时起点，0 = 未开弹） */
+  let seqStartedAt = 0;
+  /** 整串已提交（800ms 过渡期屏蔽输入） */
+  let seqFinishing = false;
+  /** 键盘上按住的键（judgeStep 输入，抬起即移除） */
+  const seqPressed = new Set<number>();
+  let seqMarks: KeyMark[] = [];
+  /** 本节第几道视奏题（功能气泡分两题触发） */
+  let seqAskNo = 0;
+  /** 当前展示的题（完成反馈 / 退出语义用） */
+  let currentCq: CurrentQuestion | null = null;
+
+  /* ---------- 横屏检测（键盘视窗 view 与 CSS 类） ---------- */
+
+  const orientationMq = typeof window.matchMedia === 'function' ? window.matchMedia('(orientation: landscape)') : null;
+
+  function isLandscape(): boolean {
+    return orientationMq?.matches === true;
+  }
+
+  function keyboardView(): KeyboardView {
+    return isLandscape() ? 'wide' : 'std';
+  }
+
+  /** 当前视奏键盘（函数内读取，避开 askCurrent 里的空值收窄） */
+  function currentSeqKb(): PianoKeyboard | null {
+    return seqKb;
+  }
+
   /* ---------- 功能气泡队列（串行弹，微课卡弹层优先） ---------- */
 
   interface CoachJob {
@@ -254,7 +307,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
           return '这个和弦是什么性质？';
       }
     }
-    if (q.train === 'note') return '这个音在该调里唱什么？';
+    if (q.train === 'note') return '跟着谱子弹：调号在最左，往后会滑走';
     if (q.train === 'piece') return '听 / 看动机，它在什么调上？';
     return q.ask === 'maj' ? '大调主音是？' : '小调主音是？';
   }
@@ -338,8 +391,22 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
 
   function renderStage(cq: CurrentQuestion): void {
     const q = cq.question;
+    seqInst?.destroy();
+    seqInst = null;
     stage.replaceChildren();
-    if (q.cq !== undefined) {
+    if (q.seq !== undefined) {
+      // 视奏：滚动谱面（ghost 回调接到键盘高亮，键盘在 askCurrent 里挂载）
+      seqInst = seqStage({
+        seq: q.seq,
+        clef: q.clef,
+        type: q.type,
+        n: q.n,
+        onGhost: (midis) => applySeqGhost(midis),
+      });
+      stage.append(seqInst.root);
+      seqInst.setCurrent(0);
+      seqInst.goTo(0);
+    } else if (q.cq !== undefined) {
       renderChordStage(q);
     } else if (q.train === 'piece' && q.pieceId) {
       const piece = findPiece(q.pieceId);
@@ -411,6 +478,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
 
   function askCurrent(cq: CurrentQuestion): void {
     askCount++;
+    currentCq = cq;
     lastBlock = cq.block;
     renderHead(cq);
     renderStage(cq);
@@ -418,17 +486,25 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
     pad = null;
     chordIn?.destroy();
     chordIn = null;
+    seqKb?.destroy();
+    seqKb = null;
+    resetSeqState();
     const q = cq.question;
     const input = q.answerInput ?? 'options';
-    if (input === 'keyboard-build' || input === 'keyboard-tap') {
+    if (q.seq !== undefined) {
+      // 视奏题：无答题 pad，挂 pressMode 键盘 + 出题定位音域
+      seqQ = q;
+      seqAskNo++;
+      padHost.dataset.layout = 'seq';
+      mountSeqKeyboard(q);
+    } else if (input === 'keyboard-build' || input === 'keyboard-tap') {
       // 键盘作答：pad 隐藏，确认后走 submitAnswer
       padHost.dataset.layout = input;
       chordIn = chordInput((midis) => submitAnswer(midis, cq));
       padHost.replaceChildren(chordIn.root);
     } else {
       const options = displayOptions(q);
-      const layout: 'row3' | 'grid6' | 'grid4' =
-        q.cq !== undefined ? (options.length <= 3 ? 'row3' : 'grid4') : q.train === 'note' ? 'row3' : 'grid6';
+      const layout: 'row3' | 'grid6' | 'grid4' = q.cq !== undefined ? (options.length <= 3 ? 'row3' : 'grid4') : 'grid6';
       pad = answerPad({
         options,
         layout,
@@ -438,13 +514,19 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       padHost.dataset.layout = layout;
     }
 
-    // 首遇微课卡（调号卡 `rc|` 与和弦卡 `rcq|` 各自去重；开关关闭或已见过则不弹）
+    // 首遇微课卡（调号卡 `rc|` 与和弦/视奏卡 `rcq|` 各自去重；开关关闭或已见过则不弹）
     const state = ctx.getState();
-    const card = q.cq !== undefined ? firstSeenChord(q.cq) : firstSeen(q.type, q.n, q.ask);
+    const card =
+      q.seq !== undefined
+        ? firstSeenSeq(q)
+        : q.cq !== undefined
+          ? firstSeenChord(q.cq)
+          : firstSeen(q.type, q.n, q.ask);
     const cid = card.id;
     if (state.config.showRuleCards && !state.seenKeys.includes(cid)) {
       pad?.setDisabled(true);
       chordIn?.setDisabled(true);
+      currentSeqKb()?.setDisabled(true);
       const dismiss = (remember: boolean): void => {
         overlayCloser = null;
         if (remember) ctx.update((s) => markSeen(s, cid));
@@ -453,6 +535,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
         controller.markShown();
         pad?.setDisabled(false);
         chordIn?.setDisabled(false);
+        seqKb?.setDisabled(false);
         pumpCoach(); // 卡片关掉后补弹排队的气泡
       };
       const sheet = ruleCardSheet(card, dismiss);
@@ -477,7 +560,183 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
     if (input === 'keyboard-build') {
       offerCoach('coach.keyboard', () => chordIn?.root ?? null, '键盘拼和弦', '点选或划过即选键；左右滑动键盘区换八度，音符记在下方。');
     }
+    if (q.seq !== undefined) {
+      if (seqAskNo === 1) {
+        offerCoach('coach.seq-keyboard', () => seqKb?.root ?? null, '视奏键盘', '按下发声，双音按两键，按错红闪重来。');
+      } else if (seqAskNo === 2) {
+        offerCoach('coach.seq-scroll', () => seqInst?.root ?? null, '谱面会走', '谱子会自己走：绿=过，红=错过。');
+      }
+    }
     pumpCoach();
+  }
+
+  /* ---------- 视奏（note）判题状态机 ---------- */
+
+  function resetSeqState(): void {
+    seqQ = null;
+    seqIdx = 0;
+    seqErrors = 0;
+    seqFirstErr = -1;
+    seqBeatMissed = false;
+    seqMissStreak = 0;
+    seqStartedAt = 0;
+    seqFinishing = false;
+    seqPressed.clear();
+    seqMarks = [];
+  }
+
+  /** 挂 pressMode 键盘（横屏 wide / 竖屏 std），出题时 ensureRange 定位目标音域 */
+  function mountSeqKeyboard(q: Question): void {
+    const seq = q.seq;
+    if (!seq) return;
+    seqKb?.destroy();
+    seqKb = pianoKeyboard({
+      view: keyboardView(),
+      interactive: true,
+      pressMode: true,
+      onPressDown: (midi) => onSeqPressDown(midi),
+      onPressUp: (midi) => seqPressed.delete(midi),
+    });
+    padHost.replaceChildren(seqKb.root);
+    seqKb.ensureRange(seq.loMidi, seq.hiMidi);
+    seqKb.setMarks(seqMarks);
+  }
+
+  /** ghost 高亮（谱面 onGhost 回调透传到键盘） */
+  function applySeqGhost(midis: readonly number[]): void {
+    seqMarks = midis.map((m) => ({ midi: m, kind: 'ghost' as const }));
+    seqKb?.setMarks(seqMarks);
+  }
+
+  /** 按下目标音提示：melody-synth 单音 */
+  function playTargetHint(midis: readonly number[]): void {
+    const m = midis[0];
+    if (m === undefined) return;
+    try {
+      const d = midiToKeyDef(m);
+      playMelody([{ letter: d.letter, oct: d.oct, acc: d.acc, dur: 0.3 }], 120);
+    } catch {
+      // 音频不可用时静默
+    }
+  }
+
+  function onSeqPressDown(midi: number): void {
+    const q = seqQ;
+    if (q?.seq === undefined || seqFinishing || feedback !== null || overlayCloser !== null) return;
+    const beat = q.seq.notes[seqIdx];
+    if (!beat) return;
+    if (seqStartedAt === 0) seqStartedAt = Date.now();
+    seqPressed.add(midi);
+    const verdict = judgeStep(beat.midis, [...seqPressed]);
+    if (verdict === 'wait') {
+      // 双音进度提示（如「1/2」小字）
+      seqKb?.setHint(`${seqPressed.size}/${beat.midis.length}`);
+      return;
+    }
+    if (verdict === 'ok') {
+      onSeqOk();
+      return;
+    }
+    onSeqMiss(beat.midis);
+  }
+
+  /** 判 ok：上色绿 → 前进一拍；弹完 → 整串提交 */
+  function onSeqOk(): void {
+    const seq = seqQ?.seq;
+    if (!seq) return;
+    seqPressed.clear();
+    seqMissStreak = 0;
+    seqBeatMissed = false;
+    seqKb?.setHint(null);
+    seqInst?.setGhost([]);
+    seqInst?.freeze(false);
+    seqInst?.markState(seqIdx, 'done');
+    advanceSeq();
+    void haptic('light');
+    if (seqIdx >= seq.notes.length) finishSeq();
+  }
+
+  /** 判 miss：该拍计 1 错（同拍连错不重复计）、红闪冻结、播目标音；2 错 ghost、3 错强制前进 */
+  function onSeqMiss(target: readonly number[]): void {
+    const seq = seqQ?.seq;
+    if (!seq) return;
+    if (!seqBeatMissed) {
+      seqBeatMissed = true;
+      seqErrors++;
+      if (seqFirstErr < 0) seqFirstErr = seqIdx;
+    }
+    seqPressed.clear();
+    seqKb?.setHint(null);
+    seqInst?.markState(seqIdx, 'miss');
+    seqInst?.freeze(true);
+    void haptic('error');
+    playTargetHint(target);
+    seqMissStreak++;
+    if (seqMissStreak >= 2) seqInst?.setGhost(target);
+    if (seqMissStreak >= 3) {
+      seqMissStreak = 0;
+      seqBeatMissed = false;
+      seqInst?.setGhost([]);
+      seqInst?.freeze(false);
+      advanceSeq();
+      if (seqIdx >= seq.notes.length) finishSeq();
+    }
+  }
+
+  /** 当前拍完成后前进：当前高亮 / 平移 / 进度条推到下一拍 */
+  function advanceSeq(): void {
+    const seq = seqQ?.seq;
+    if (!seq) return;
+    seqIdx++;
+    seqInst?.setCurrent(seqIdx);
+    seqInst?.goTo(seqIdx);
+    seqInst?.setProgress(seqIdx, seq.notes.length);
+  }
+
+  /** 整串弹完：0 错走答对反馈；有错走 toast + 800ms 直接进下一题（不弹锚点卡） */
+  function finishSeq(): void {
+    const q = seqQ;
+    const cq = currentCq;
+    if (q?.seq === undefined || cq === null || seqFinishing) return;
+    seqFinishing = true;
+    seqQ = null;
+    const totalMs = seqStartedAt > 0 ? Date.now() - seqStartedAt : 0;
+    const res = controller.submitSequence(seqErrors, totalMs, seqFirstErr);
+    const total = q.seq.notes.length;
+    if (res.ok) {
+      combo++;
+      comboNum.textContent = String(combo);
+      try {
+        playCorrect(q.type, q.n, q.ask, combo);
+      } catch {
+        // 音频不可用时静默
+      }
+      void haptic('success');
+      showFeedback(true, pickOne(OK_PHRASES), res.explain, cq, 420, () => next());
+    } else {
+      combo = 0;
+      comboNum.textContent = '0';
+      try {
+        playWrong();
+      } catch {
+        // 音频不可用时静默
+      }
+      void haptic('error');
+      const hit = total - seqErrors;
+      toast(seqFirstErr >= 0 ? `${hit}/${total} · 首错第 ${seqFirstErr + 1} 拍` : `${hit}/${total}`);
+      later(() => next(), 800);
+    }
+  }
+
+  /** 视奏已开弹（i>0）退出时走 skip 入错题队列；i=0 直接返回 */
+  function skipStartedSeq(): void {
+    if (seqFinishing) return;
+    if (seqQ !== null && seqIdx > 0) {
+      controller.skip();
+      combo = 0;
+      comboNum.textContent = '0';
+    }
+    resetSeqState();
   }
 
   function submitAnswer(answer: string | readonly number[], cq: CurrentQuestion): void {
@@ -617,6 +876,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
           on: {
             click: () => {
               close();
+              skipStartedSeq();
               ctx.back();
             },
           },
@@ -639,6 +899,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       showExitConfirm();
       return;
     }
+    skipStartedSeq();
     ctx.back();
   }
 
@@ -652,10 +913,11 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
     if (touchY === null) return;
     const dy = (e.changedTouches[0]?.clientY ?? touchY) - touchY;
     touchY = null;
-    if (feedback !== null) return;
+    if (feedback !== null || seqFinishing) return;
     if (dy < -60) {
-      // 上滑：跳过
+      // 上滑：跳过（视奏已开弹同样入错题队列）
       controller.skip();
+      resetSeqState();
       combo = 0;
       comboNum.textContent = '0';
       toast('已跳过 · 进错题队列');
@@ -704,6 +966,16 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
   timers.push(ticker);
 
   // 启动
+  root.classList.toggle('is-landscape', isLandscape());
+
+  // 横竖屏切换：换 CSS 类 + 重建视奏键盘视窗（wide/std），音域重算
+  const onOrientationChange = (): void => {
+    root.classList.toggle('is-landscape', isLandscape());
+    const q = seqQ;
+    if (q?.seq !== undefined) mountSeqKeyboard(q);
+  };
+  orientationMq?.addEventListener?.('change', onOrientationChange);
+
   later(() => next(), 0);
 
   // 返回键拦截：退出确认 → 弹层（微课卡 / 块小结 / 反馈条）→ 已答题先确认、未答题放行页面返回
@@ -724,6 +996,8 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       showExitConfirm();
       return true;
     }
+    // 视奏已开弹（i>0）→ 入错题队列；i=0 直接返回
+    skipStartedSeq();
     return false;
   });
 
@@ -735,6 +1009,11 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       window.clearInterval(ticker);
       pad?.destroy();
       chordIn?.destroy();
+      seqKb?.destroy();
+      seqKb = null;
+      seqInst?.destroy();
+      seqInst = null;
+      orientationMq?.removeEventListener?.('change', onOrientationChange);
       document.removeEventListener('keydown', onKey);
       stage.removeEventListener('touchstart', onTouchStart);
       stage.removeEventListener('touchend', onTouchEnd);

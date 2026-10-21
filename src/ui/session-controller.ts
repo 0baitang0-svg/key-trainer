@@ -7,7 +7,7 @@
 import type { AppState } from '../core/store';
 import { addXp, checkIn } from '../core/store';
 import type { Ask, Clef, SigType } from '../core/music-theory';
-import { FL_ORDER, MAJ_GRID, MIN_GRID, SH_ORDER, noteInfo } from '../core/music-theory';
+import { FL_ORDER, MAJ_GRID, MIN_GRID, SH_ORDER } from '../core/music-theory';
 import {
   buildOptions,
   checkAnswer,
@@ -23,6 +23,7 @@ import {
   type Question,
   type TrainMode,
 } from '../core/question-generator';
+import { noteAtStep, seqExplain } from '../core/seq-generator';
 import { applyAttempt, aggregate, itemKey, median, type AttemptRecord } from '../core/stats';
 import { dueItems, enqueueWrong, markAnswer } from '../core/scheduler';
 import {
@@ -86,6 +87,12 @@ export interface QuestionRecord {
   skipped: boolean;
   favorite: boolean;
   boss: boolean;
+  /** 视奏（note）串明细：错拍数 */
+  seqErrors?: number;
+  /** 视奏（note）串明细：总拍数 */
+  seqTotal?: number;
+  /** 视奏（note）串明细：首错拍（0 起，-1 = 无首错） */
+  firstErrIdx?: number;
 }
 
 export interface SessionSummary {
@@ -209,7 +216,7 @@ function resolveDailyLevel(state: AppState, levelId?: string): Level {
 
 /** 自由练习配置 */
 export interface FreeConfig {
-  /** 训练模式（sig / note / func / diatonic / degrees / build，mix = 认调 + 认音交替） */
+  /** 训练模式（sig / note / func / diatonic / degrees / build，mix = 认调 + 视奏交替） */
   train: TrainMode | 'mix';
   clef: Clef | 'mix';
   ask: Ask | 'mix';
@@ -219,7 +226,7 @@ export interface FreeConfig {
 /** 各训练模式的自由练习标题与一句话焦点 */
 const FREE_META: Record<TrainMode, { title: string; focus: string }> = {
   sig: { title: '自由练习 · 认调', focus: '看调号，直读主音' },
-  note: { title: '自由练习 · 认音', focus: '看谱面音位，判断调号带来的升降' },
+  note: { title: '自由练习 · 视奏', focus: '跟谱弹音，调号在最左、往后会滑走' },
   piece: { title: '自由练习 · 曲目认调', focus: '跟着名曲认调号' },
   func: { title: '自由练习 · 和弦归属', focus: '看属七，直读它归属的调' },
   diatonic: { title: '自由练习 · 顺阶和弦', focus: '级数 ↔ 顺阶和弦 ↔ 功能' },
@@ -227,7 +234,7 @@ const FREE_META: Record<TrainMode, { title: string; focus: string }> = {
   build: { title: '自由练习 · 和弦构建', focus: '按音程公式拼出和弦' },
 };
 
-/** 自由练习计划（混合题型按分钟交替出认调 / 认音块） */
+/** 自由练习计划（混合题型按分钟交替出认调 / 视奏块） */
 export function planFromFree(cfg: FreeConfig): SessionPlan {
   const clefs: Clef[] = cfg.clef === 'mix' ? ['treble', 'bass'] : [cfg.clef];
   const asks: Ask[] = cfg.ask === 'mix' ? ['maj', 'min'] : [cfg.ask];
@@ -363,16 +370,17 @@ export function planFromWeak(target: WeakTarget, minutes = 3): SessionPlan {
 /**
  * 错题锚点卡里要描红的第 k 个升降号：
  * - 认调：升号看最右、降号看倒二（1♭ 特例看 B♭）
- * - 认音：看该音名在调号里的那一个
+ * - 视奏（note）：看首错音所在字母在调号里的那一个（无首错则不高亮）
  */
-export function anchorAccent(q: Question): number | undefined {
+export function anchorAccent(q: Question, firstErrIdx?: number): number | undefined {
   if (q.cq !== undefined) return undefined;
   if (q.n === 0) return undefined;
   if (q.train === 'note') {
-    const info = noteInfo(q.step ?? 0, q.type, q.n, q.clef);
-    if (info.acc === 0) return undefined;
+    const beat = firstErrIdx !== undefined && firstErrIdx >= 0 ? q.seq?.notes[firstErrIdx] : undefined;
+    if (!beat) return undefined;
+    const { letter } = noteAtStep(beat.step, q.clef);
     const order = q.type === 'sh' ? SH_ORDER : FL_ORDER;
-    const idx = order.slice(0, q.n).indexOf(info.letter);
+    const idx = order.slice(0, q.n).indexOf(letter);
     return idx >= 0 ? idx : undefined;
   }
   if (q.type === 'sh') return q.n - 1;
@@ -381,14 +389,14 @@ export function anchorAccent(q: Question): number | undefined {
 
 /**
  * 生成作答展示选项：
+ * - 视奏（note）：无选项（键盘逐拍作答），返回 []
  * - 和弦题：核心层已给出 4 选（或功能 3 选），原样展示
- * - 认音：固定「♮原位 / ♯升 / ♭降」3 项
  * - 认调：核心层 4 项（正确 + 3 易混）再补 2 个随机干扰，凑成 2×3 六宫格
  */
 export function displayOptions(q: Question): string[] {
+  if (q.train === 'note') return [];
   if (q.cq !== undefined) return [...q.options];
   const base = buildOptions(q);
-  if (q.train === 'note') return base;
   const grid = q.ask === 'maj' ? MAJ_GRID : MIN_GRID;
   const extra = shuffle(grid.filter((l) => !base.includes(l))).slice(0, 2);
   return shuffle([...base, ...extra]);
@@ -547,6 +555,54 @@ export class SessionController {
     return { ...res, reactionMs };
   }
 
+  /**
+   * 视奏（note）整串提交：逐拍判题在 UI 层完成，这里入统计 / 错题队列 / 经验与记录。
+   * reactionMs = 整串总耗时 / 拍数（每拍平均反应）。
+   * @param errors      错拍数（0 = 全对）
+   * @param totalMs     整串弹奏总耗时（毫秒）
+   * @param firstErrIdx 首错拍（0 起，无首错传 -1）
+   */
+  submitSequence(
+    errors: number,
+    totalMs: number,
+    firstErrIdx = -1,
+  ): { ok: boolean; explain: string; reactionMs: number } {
+    const question = this.recent[this.recent.length - 1];
+    const len = question.seq?.notes.length ?? 1;
+    const reactionMs = Math.round(totalMs / Math.max(1, len));
+    const ok = errors === 0;
+    const now = Date.now();
+    const rec: AttemptRecord = {
+      key: itemKey(question.train, question.type, question.n, question.clef, question.ask),
+      ok,
+      reactionMs,
+      at: now,
+    };
+    this.ctx.update((s) => {
+      const withStats: AppState = { ...s, stats: applyAttempt(s.stats, rec) };
+      const withReview: AppState = {
+        ...withStats,
+        review: markAnswer(withStats.review, questionKey(question), ok, now, this.askedTotal),
+      };
+      return addXp(withReview, ok ? XP_CORRECT : XP_WRONG);
+    });
+    if (ok) {
+      this.combo++;
+      this.bestCombo = Math.max(this.bestCombo, this.combo);
+      this.xpEarned += XP_CORRECT;
+    } else {
+      this.combo = 0;
+      this.xpEarned += XP_WRONG;
+    }
+    const explain = seqExplain(firstErrIdx, errors, len);
+    this.pushRecord(question, ok, null, '弹完即可', explain, reactionMs, false, {
+      seqErrors: errors,
+      seqTotal: len,
+      firstErrIdx,
+    });
+    return { ok, explain, reactionMs };
+  }
+
   /** 跳过（上滑）：进错题队列，不计作答 */
   skip(): void {
     const question = this.recent[this.recent.length - 1];
@@ -573,6 +629,7 @@ export class SessionController {
     explain: string,
     reactionMs: number,
     skipped: boolean,
+    seq?: { seqErrors: number; seqTotal: number; firstErrIdx: number },
   ): void {
     const block = this.plan.blocks[this.blockIndex];
     const isBoss =
@@ -580,7 +637,18 @@ export class SessionController {
       block.levelId !== undefined &&
       findLevel(block.levelId)?.bossQuestion === true &&
       this.askedInBlock === block.questionCount;
-    this.records.push({ question, ok, picked, correctLabel, explain, reactionMs, skipped, favorite: false, boss: isBoss });
+    this.records.push({
+      question,
+      ok,
+      picked,
+      correctLabel,
+      explain,
+      reactionMs,
+      skipped,
+      favorite: false,
+      boss: isBoss,
+      ...seq,
+    });
   }
 
   /** 结课：打卡 + 关卡结算，返回摘要 */

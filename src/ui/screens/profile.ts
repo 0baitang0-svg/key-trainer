@@ -14,7 +14,7 @@ import { badgeWall } from './result';
 /** 训练模式 → 中文名（「模式表现」条形区） */
 const TRAIN_LABELS: Record<string, string> = {
   sig: '认调',
-  note: '认音',
+  note: '视奏',
   piece: '曲目',
   func: '和弦归属',
   diatonic: '顺阶和弦',

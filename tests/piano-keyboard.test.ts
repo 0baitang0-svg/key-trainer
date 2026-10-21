@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GEOMETRY,
   KEY_GEOMETRY,
+  cWindowStart,
   keyDefName,
+  keyGeometry,
   keyHitRect,
   midiToKeyDef,
   pianoKeyDefs,
@@ -120,6 +123,102 @@ describe('触控几何 KEY_GEOMETRY / keyHitRect（1.5 八度视窗）', () => {
       const r = keyHitRect(right!.midi, 48);
       expect(overlap(hit, l)).toBeGreaterThanOrEqual(4);
       expect(overlap(hit, r)).toBeGreaterThanOrEqual(4);
+    }
+  });
+});
+
+describe('wide 视窗几何（2 八度）', () => {
+  it('GEOMETRY 查表：std 现值不变，wide = 14 白 10 黑 / viewBox 504×76', () => {
+    expect(keyGeometry()).toBe(GEOMETRY.std);
+    expect(KEY_GEOMETRY).toBe(GEOMETRY.std);
+    expect(KEY_GEOMETRY.VIEW_H).toBe(130);
+    const G = keyGeometry('wide');
+    expect(G).toBe(GEOMETRY.wide);
+    expect(G.VIEW_WHITE).toBe(14);
+    expect(G.VIEW_BLACK).toBe(10);
+    expect(G.VIEW_KEYS).toBe(24);
+    expect(G.VIEW_W).toBe(504);
+    expect(G.VIEW_W).toBe(G.VIEW_WHITE * G.WHITE_W);
+    expect(G.VIEW_H).toBe(76);
+    expect(G.WHITE_W).toBe(36);
+    expect(G.WHITE_H).toBe(62);
+    expect(G.BLACK_W).toBe(22);
+    expect(G.BLACK_H).toBe(40);
+    expect(G.HIT_PAD_X).toBe(6);
+    expect(G.HIT_PAD_BOTTOM).toBe(12);
+  });
+
+  it('viewportKeyDefs wide：24 键（14 白 10 黑）C3–B4，黑键 2-3-2 分组', () => {
+    const defs = viewportKeyDefs(48, 'wide');
+    expect(defs).toHaveLength(24);
+    expect(defs.filter((d) => !d.isBlack)).toHaveLength(14);
+    expect(defs.filter((d) => d.isBlack)).toHaveLength(10);
+    expect(defs[0]).toMatchObject({ midi: 48, letter: 'C', isBlack: false });
+    expect(defs[23]).toMatchObject({ midi: 71, letter: 'B', isBlack: false });
+    expect(defs.filter((d) => d.isBlack).map((d) => d.midi)).toEqual([49, 51, 54, 56, 58, 61, 63, 66, 68, 70]);
+  });
+
+  it('wide keyHitRect：白键 36×62、黑键热区 34×52、末白键右缘 = 504', () => {
+    const white = keyHitRect(48, 48, 'wide');
+    expect(white).toMatchObject({ x: 0, y: 0, width: 36, height: 62, isBlack: false });
+    const black = keyHitRect(49, 48, 'wide'); // C♯3 贴 C|D 缝
+    expect(black.isBlack).toBe(true);
+    expect(black.x).toBe(22); // 36 + BLACK_DX3 - 黑宽一半 11 - 外扩 6
+    expect(black.width).toBe(22 + 2 * 6);
+    expect(black.height).toBe(40 + 12);
+    expect(keyHitRect(71, 48, 'wide').x + 36).toBe(504); // 末白键 B4 贴 viewBox 右缘
+  });
+
+  it('wide 黑键热区与相邻白键重叠 ≥ 4 单位（命中优先）', () => {
+    const defs = viewportKeyDefs(48, 'wide');
+    const whites = defs.filter((d) => !d.isBlack);
+    const overlap = (a: { x: number; width: number }, b: { x: number; width: number }): number =>
+      Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+    for (const black of defs.filter((d) => d.isBlack)) {
+      const hit = keyHitRect(black.midi, 48, 'wide');
+      const left = [...whites].reverse().find((w) => w.midi < black.midi);
+      const right = whites.find((w) => w.midi > black.midi);
+      expect(left, `黑键 ${black.midi} 左邻白键`).toBeDefined();
+      expect(right, `黑键 ${black.midi} 右邻白键`).toBeDefined();
+      expect(overlap(hit, keyHitRect(left!.midi, 48, 'wide'))).toBeGreaterThanOrEqual(4);
+      expect(overlap(hit, keyHitRect(right!.midi, 48, 'wide'))).toBeGreaterThanOrEqual(4);
+    }
+  });
+});
+
+describe('cWindowStart（ensureRange 视窗对齐纯计算）', () => {
+  it('目标区间已在视窗内 → null（不移动）', () => {
+    expect(cWindowStart(48, 71, 48, 24)).toBeNull();
+    expect(cWindowStart(50, 60, 48, 17)).toBeNull();
+    expect(cWindowStart(48, 64, 48, 17)).toBeNull(); // 下端点贴边
+    expect(cWindowStart(49, 71, 48, 24)).toBeNull(); // 上端点贴边
+    expect(cWindowStart(48, 65, 48, 17)).not.toBeNull(); // hi 超出 48..64
+    expect(cWindowStart(47, 55, 48, 17)).not.toBeNull(); // lo 低于起点
+  });
+
+  it('不在内 → 对齐到 C 窗口（12 的倍数）并覆盖目标区间', () => {
+    expect(cWindowStart(50, 58, 72, 17)).toBe(48); // 48..64 覆盖 50..58
+    expect(cWindowStart(62, 75, 36, 24)).toBe(60); // 60..83 覆盖 62..75
+    expect(cWindowStart(85, 95, 36, 17)).toBe(84); // 84..100 覆盖 85..95
+    expect(48 % 12).toBe(0);
+  });
+
+  it('C 边界 clamp：低不过 C2 起点 36、高不过 C6 起点 84（仍 C 对齐）', () => {
+    expect(cWindowStart(30, 45, 60, 24)).toBe(36); // floor(30/12)*12=24 → 抬到 36
+    expect(cWindowStart(24, 40, 72, 17)).toBe(36);
+    expect(cWindowStart(96, 105, 36, 24)).toBe(84); // 96 → 压到 84（84..107 仍覆盖）
+    expect(cWindowStart(97, 100, 36, 17)).toBe(84); // 96 → 84（84..100 覆盖）
+  });
+
+  it('扫描：返回值恒为 12 的倍数且落在 [36,84]', () => {
+    for (let lo = 30; lo <= 100; lo += 5) {
+      for (const keys of [17, 24]) {
+        const start = cWindowStart(lo, lo + 11, 36, keys);
+        if (start === null) continue;
+        expect(start % 12).toBe(0);
+        expect(start).toBeGreaterThanOrEqual(36);
+        expect(start).toBeLessThanOrEqual(84);
+      }
     }
   });
 });
