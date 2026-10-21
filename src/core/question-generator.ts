@@ -457,6 +457,8 @@ export interface PickConfig {
   qualities?: ChordQuality[];
   /** 错题回炉占比，默认 0.27（要求 25%~30%） */
   reviewRatio?: number;
+  /** 视奏序列长度覆盖（长串/百音练习；缺省按自适应档 6..16） */
+  seqLen?: number;
 }
 
 export interface PickOptions {
@@ -606,7 +608,9 @@ export function pickQuestion(
   if (c.train === 'note') {
     // 视奏串：难度档吃统计（ema/样本 → 5 档 profile），seed 进错题 key 保证回炉同串
     const stat = stats.items[itemKey(c.train, c.type, c.n, c.clef, c.ask)];
-    const profile = seqProfileOf(stat?.emaAccuracy, stat?.attempts ?? 0);
+    let profile = seqProfileOf(stat?.emaAccuracy, stat?.attempts ?? 0);
+    // 长串/百音：只覆盖长度，难度密度（记号/双音/音域）仍按自适应档
+    if (cfg.seqLen !== undefined && cfg.seqLen > 0) profile = { ...profile, len: cfg.seqLen };
     attachSeq(q, profile, Math.floor(rng() * 0xffffffff));
   }
   if (c.train === 'piece') {

@@ -220,7 +220,10 @@ export interface FreeConfig {
   train: TrainMode | 'mix';
   clef: Clef | 'mix';
   ask: Ask | 'mix';
+  /** 分钟数；0 = 不限时（弹到主动退出） */
   minutes: number;
+  /** 视奏串长覆盖（缺省/0 = 自适应 6..16；40/100 = 长串，自动不限时） */
+  seqLen?: number;
 }
 
 /** 各训练模式的自由练习标题与一句话焦点 */
@@ -240,7 +243,34 @@ export function planFromFree(cfg: FreeConfig): SessionPlan {
   const asks: Ask[] = cfg.ask === 'mix' ? ['maj', 'min'] : [cfg.ask];
   const blocks: SessionBlock[] = [];
   const trains: TrainMode[] = cfg.train === 'mix' ? ['sig', 'note'] : [cfg.train];
-  for (let i = 0; i < cfg.minutes; i++) {
+  // 串长只对视奏题型生效（其它题型下残留值直接忽略）
+  const seqLen =
+    cfg.train === 'note' && cfg.seqLen !== undefined && cfg.seqLen > 0 ? cfg.seqLen : undefined;
+
+  // 长串视奏（40/100 音）：单块、不限时、按串数收束
+  if (seqLen !== undefined) {
+    const meta = FREE_META.note;
+    return {
+      mode: 'free',
+      title: '自由练习',
+      blocks: [
+        {
+          kind: 'free',
+          title: meta.title,
+          focus: meta.focus,
+          pick: { train: 'note', clefs, asks: ['maj'], seqLen },
+          questionCount: seqLen >= 100 ? 1 : seqLen >= 40 ? 2 : 4,
+          durationMs: Number.POSITIVE_INFINITY,
+          minutes: 0,
+        },
+      ],
+    };
+  }
+
+  // 不限时（minutes = 0）：保留题型轮换块结构，但不计时、题数近无限（弹到主动退出）
+  const unlimited = cfg.minutes <= 0;
+  const n = unlimited ? trains.length : cfg.minutes;
+  for (let i = 0; i < n; i++) {
     const train = trains[i % trains.length];
     const meta = FREE_META[train];
     blocks.push({
@@ -252,9 +282,9 @@ export function planFromFree(cfg: FreeConfig): SessionPlan {
         clefs,
         asks: train === 'note' ? ['maj'] : asks,
       },
-      questionCount: QUESTIONS_PER_MINUTE,
-      durationMs: 60_000,
-      minutes: 1,
+      questionCount: unlimited ? 99 : QUESTIONS_PER_MINUTE,
+      durationMs: unlimited ? Number.POSITIVE_INFINITY : 60_000,
+      minutes: unlimited ? 0 : 1,
     });
   }
   return { mode: 'free', title: '自由练习', blocks };

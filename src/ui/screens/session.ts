@@ -262,7 +262,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       const left = Math.max(0, cq.block.durationMs - (Date.now() - blockStartedAt(cq.block)));
       timeLabel.textContent = `剩余 ${fmtCountdown(left)}`;
     } else {
-      timeLabel.textContent = cq.isBoss ? 'BOSS 题' : '';
+      timeLabel.textContent = cq.isBoss ? 'BOSS 题' : '不限时';
     }
   }
 

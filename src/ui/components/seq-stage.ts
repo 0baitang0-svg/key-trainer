@@ -17,8 +17,11 @@ export const SEQ_ANCHOR = 0.35;
 /**
  * 第 i 拍时的平移量（CSS px，>= 0）：锚点使 seqNoteX(i) 落在视窗 35% 处，
  * 再 clamp 到 [0, 渲染总宽 - 视窗宽]（窄于视窗时恒 0）。
+ * 前 2 拍恒 0：开弹瞬间谱号 + 调号 + 起始音完整可见，第 3 拍起才跟随
+ * 平移（调号随后自然滑出，保持「记住调号」的训练特性）。
  */
 export function offsetFor(i: number, visW: number, scale: number, len: number): number {
+  if (i < 2) return 0;
   const total = seqStaffWidth(len) * scale;
   const target = seqNoteX(i) * scale - visW * SEQ_ANCHOR;
   const max = Math.max(0, total - visW);

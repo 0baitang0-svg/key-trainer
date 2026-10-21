@@ -157,6 +157,27 @@ export function homeScreen(ctx: AppContext): ScreenInstance {
 
   /* ---------- 自定义练习（折叠，默认收起） ---------- */
 
+  // 视奏串长段（仅题型=视奏时显示，题型回调联动 hidden）
+  const seqHint = h('p', {
+    className: 'card__note',
+    text: '长串练习自动不限时，按串数收束',
+    attrs: { hidden: '' },
+  });
+  const seqRow = h(
+    'div',
+    { className: 'seg-row' },
+    seg('串长', [
+      { value: '0', label: '自适应' },
+      { value: '40', label: '长串 40' },
+      { value: '100', label: '百音 100' },
+    ], String(free.seqLen ?? 0), (v) => {
+      free.seqLen = Number(v);
+      seqHint.hidden = (free.seqLen ?? 0) <= 0;
+    }),
+    seqHint,
+  );
+  seqRow.hidden = free.train !== 'note';
+
   const foldBody = h('div', { className: 'fold__body' }, seg('题型', [
     { value: 'sig', label: '认调' },
     { value: 'note', label: '视奏' },
@@ -165,7 +186,10 @@ export function homeScreen(ctx: AppContext): ScreenInstance {
     { value: 'diatonic', label: '顺阶和弦' },
     { value: 'degrees', label: '键盘音级' },
     { value: 'build', label: '和弦构建' },
-  ], free.train, (v) => (free.train = v)), seg('谱号', [
+  ], free.train, (v) => {
+    free.train = v;
+    seqRow.hidden = v !== 'note';
+  }), seg('谱号', [
     { value: 'treble', label: '高音' },
     { value: 'bass', label: '低音' },
     { value: 'mix', label: '混合' },
@@ -177,7 +201,8 @@ export function homeScreen(ctx: AppContext): ScreenInstance {
     { value: '3', label: '3 分钟' },
     { value: '5', label: '5 分钟' },
     { value: '10', label: '10 分钟' },
-  ], String(free.minutes), (v) => (free.minutes = Number(v))), h('button', {
+    { value: '0', label: '不限时' },
+  ], String(free.minutes), (v) => (free.minutes = Number(v))), seqRow, h('button', {
     className: 'btn btn--ghost btn--wide',
     text: '开始自由练习',
     attrs: { type: 'button' },

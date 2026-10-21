@@ -37,20 +37,27 @@ describe('offsetFor（谱面平移纯函数）', () => {
     }
   });
 
-  it('随 i 单调不减；未触界区间（i≤11）严格递增', () => {
+  it('随 i 单调不减；未触界区间（i≥2）严格递增', () => {
     let prev = -1;
     for (let i = 0; i < LEN; i++) {
       const x = offsetFor(i, VIS, SCALE, LEN);
       expect(x).toBeGreaterThanOrEqual(prev);
       prev = x;
     }
-    for (let i = 1; i <= 11; i++) {
+    for (let i = 3; i <= 11; i++) {
       expect(offsetFor(i, VIS, SCALE, LEN)).toBeGreaterThan(offsetFor(i - 1, VIS, SCALE, LEN));
     }
   });
 
+  it('前 2 拍恒 0：开弹瞬间谱号 + 调号完整可见', () => {
+    expect(offsetFor(0, VIS, SCALE, LEN)).toBe(0);
+    expect(offsetFor(1, VIS, SCALE, LEN)).toBe(0);
+    // 第 3 拍起才开始跟随（调号随后自然滑出）
+    expect(offsetFor(3, VIS, SCALE, LEN)).toBeGreaterThan(0);
+  });
+
   it('中间拍 = seqNoteX(i) * scale - visW * 0.35（当前音落在视窗 35%）', () => {
-    for (const i of [0, 3, 5, 8, 11]) {
+    for (const i of [3, 5, 8, 11]) {
       expect(offsetFor(i, VIS, SCALE, LEN)).toBeCloseTo(seqNoteX(i) * SCALE - VIS * SEQ_ANCHOR, 6);
     }
   });
