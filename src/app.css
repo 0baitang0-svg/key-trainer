@@ -1508,10 +1508,45 @@ svg.staff {
   margin-bottom: 18px;
 }
 
+/* 退出确认：与微课卡（.sheet.mlesson）同款不透明纸面，--sheet-* 双主题各一套 */
+.sheet.exit-confirm {
+  background: var(--sheet-paper);
+  color: var(--sheet-ink);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-top: 3px solid var(--sheet-accent);
+  box-shadow: var(--sheet-shadow);
+}
+
+.exit-confirm .sheet__title {
+  color: var(--sheet-ink);
+}
+
 .exit-confirm__note {
   font-size: calc(13px * var(--fs));
-  color: var(--muted);
+  color: var(--sheet-muted);
   margin-bottom: 16px;
+}
+
+/* 纸面上的按钮：去玻璃感（同 .mlesson .btn），文字/底色适配纸面 */
+.exit-confirm .btn {
+  background: rgba(36, 31, 61, 0.05);
+  border-color: var(--sheet-line);
+  color: var(--sheet-ink);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.exit-confirm .btn--primary {
+  background: var(--sheet-accent);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: none;
+}
+
+.exit-confirm .btn--ghost {
+  background: transparent;
 }
 
 .exit-confirm .btn + .btn {
@@ -2276,62 +2311,83 @@ svg.piano.is-interactive {
   background: var(--accent);
 }
 
-/* ---------- rangeBar（视奏）：八度条中段 = 可拖滑轨，thumb 指示当前视窗 ----------
-   拖 thumb / 点轨道空白处平移视窗（半音级），指针事件只在轨道上，不进键手势 */
+/* ---------- rangeBar（视奏）：八度条中段 = 全可拖音域缩略键盘 mini-map ----------
+   白键条纹 + 黑键小方块贴缝逐键微缩渲染（SVG 画一次），半透明视窗框实时覆盖当前视窗：
+   拖框跟手平移 / 点缩略图 tap-to-seek（框中心对准点击点）/ ‹ › 步进；
+   指针事件只在轨道上（stopPropagation），不进键手势 */
 
 .piano-bar__track {
   position: relative;
   flex: 1;
   min-width: 0;
-  /* 轨道触控高度 ≥44px（含 1px 边框 = 46px） */
-  height: 44px;
+  /* 条总高 38px = 缩略键盘 20px + 上方音域文字与触控余量；44px 触控由
+     视窗框（宽 ≥ 主键盘 1/6 比例，std ≈26%、wide ≈33%）+ 整条 tap-to-seek 共同保证 */
+  height: 38px;
   border: 1px solid var(--glass-line);
   border-radius: 12px;
   background: var(--glass-2);
   box-shadow: var(--glass-rim);
   backdrop-filter: blur(12px) saturate(150%);
   -webkit-backdrop-filter: blur(12px) saturate(150%);
+  overflow: hidden;
   touch-action: none; /* 拖动平移视窗，不触发页面滚动 */
   cursor: pointer;
 }
 
-.piano-bar__thumb {
+/* 缩略键盘：铺满条宽、定高 20px 底对齐（上方留音域文字区），不拦截指针 */
+.piano-bar__mini {
   position: absolute;
-  top: 5px;
-  bottom: 5px; /* 轨道内高 42 → thumb 高 32px（28–32 达标） */
-  width: 40px;
-  border: 1px solid var(--accent);
-  border-radius: 9px;
-  background: var(--glass);
-  box-shadow: var(--glass-rim);
-  transform: translateX(-50%);
-  z-index: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: block;
+  width: 100%;
+  height: 20px;
+  pointer-events: none;
 }
 
-/* thumb 可点区域外扩到 ≥44×44（事件冒泡到轨道统一处理） */
-.piano-bar__thumb::after {
+/* 视窗框：accent 描边 + 微填充，left/width 由 viewportBoxLayout 随视窗实时定位 */
+.piano-bar__viewport {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border: 1.5px solid var(--accent);
+  border-radius: 8px;
+  cursor: grab;
+  z-index: 1;
+}
+
+.piano-bar__viewport::before {
   content: '';
   position: absolute;
-  inset: -6px -2px;
-}
-
-.piano-bar__thumb.is-dragging {
-  transform: translateX(-50%) scale(1.06);
-  box-shadow: var(--glass-rim), 0 4px 14px rgb(0 0 0 / 0.3);
-}
-
-/* 两端留出 thumb 半宽：ratio 0/1 时 thumb 全部落在轨道内，不压 ‹ › 按钮 */
-.piano-bar--range .piano-bar__center {
-  padding-inline: 20px;
-}
-
-/* 音域文字（如 C3–E4）居中覆盖轨道，随拖动实时更新；不拦截指针 */
-.piano-bar__track .piano-bar__range {
-  position: absolute;
   inset: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  opacity: 0.14;
+  pointer-events: none;
+}
+
+.piano-bar__viewport.is-dragging {
+  cursor: grabbing;
+}
+
+.piano-bar__viewport.is-dragging::before {
+  opacity: 0.26;
+}
+
+/* 音域文字（如 C3–B4）在框内上半区（缩略键盘底对齐不相压，随框实时移动）；
+   框窄于文字时以框为中心溢出仍可读；不拦截指针 */
+.piano-bar__viewport .piano-bar__range {
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  top: 3px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  font-size: calc(10.5px * var(--fs));
+  letter-spacing: 0.02em;
+  line-height: 1.25;
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
@@ -2339,18 +2395,19 @@ svg.piano.is-interactive {
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .piano-bar__thumb {
+  /* ‹ › / 出题平移时框滑动过渡；拖动中禁用位移插值（跟手），只过渡高亮 */
+  .piano-bar__viewport {
     transition:
       left 140ms ease,
-      transform 140ms ease,
-      box-shadow 140ms ease;
+      width 140ms ease;
   }
 
-  /* 拖动中 left 不过渡（跟手），只过渡放大高亮 */
-  .piano-bar__thumb.is-dragging {
-    transition:
-      transform 120ms ease,
-      box-shadow 120ms ease;
+  .piano-bar__viewport.is-dragging {
+    transition: none;
+  }
+
+  .piano-bar__viewport::before {
+    transition: opacity 140ms ease;
   }
 }
 

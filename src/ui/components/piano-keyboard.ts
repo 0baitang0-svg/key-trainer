@@ -3,7 +3,9 @@
  * 触控重设计：白键 36 单位（std 375px 屏≈32 CSS px）、黑键 22 单位（≈20 px），
  * 黑键热区左右 +6 / 下方 +12 盖住白键缝隙且命中优先；点滑连续选择、按压反馈、
  * 八度切换（‹ › 按钮 + 键盘左右边缘 24px 内水平滑动翻页）；视奏可选 rangeBar：
- * 八度条中段即滑轨，拖 thumb / 点轨道按 x 比例连续平移视窗（半音级，不打断按键手势）。
+ * 八度条中段即全可拖音域的缩略键盘（mini-map，白键条纹 + 黑键小方块贴缝），半透明视窗框
+ * 覆盖当前视窗：拖框按按下偏移跟手平移、点缩略图 tap-to-seek（框中心对准点击点），
+ * 半音级连续、不打断按键手势，音域文字随框实时移动。
  * 视奏作答走 pressMode 独立手势分支（多指并发按下/抬起，不进 toggle/点滑路径）；
  * ensureRange 出题时把视窗平移到覆盖目标区间的 C 对齐窗口。
  * 标记（target/selected/correct/wrong/ghost）、键底小字标签沿用原体系。
@@ -62,8 +64,9 @@ export interface KeyboardOptions {
   /** 八度（视窗）切换回调 */
   onViewChange?: (view: { startMidi: number; endMidi: number }) => void;
   /**
-   * 视奏专用：八度条中段变可拖滑轨（thumb 拖动 / 点轨道 tap-to-seek 连续平移视窗）。
-   * 指针事件挂在轨道自身（stopPropagation），不冒泡到键，pressMode 手势零干扰。
+   * 视奏专用：八度条中段变缩略键盘 mini-map（全可拖音域微缩钢琴 + 视窗框）：
+   * 拖视窗框 / 点缩略图 tap-to-seek 连续平移视窗。指针事件挂在轨道自身
+   * （stopPropagation），不冒泡到键，pressMode 手势零干扰。
    */
   rangeBar?: boolean;
 }
@@ -283,6 +286,31 @@ export function startFromRatio(ratio: number, min: number, max: number): number 
   return Math.round(min + r * (max - min));
 }
 
+/**
+ * 视窗框在缩略键盘上的位置（百分比，纯计算，可单测）。
+ * 缩略条覆盖全部可拖键 [min..max]（首键 minStart 到末键 maxStart+viewLen-1），
+ * 视窗框覆盖 [start, start+viewLen-1]：
+ * leftPct = (start-min)/总键数、widthPct = viewLen/总键数，
+ * start clamp 到 [min, max-viewLen+1]（即 [minStart, maxStart]）时左+右恰好贴端。
+ * max <= min（退化）时整条即框：{0, 100}。
+ */
+export function viewportBoxLayout(
+  start: number,
+  viewLen: number,
+  min: number,
+  max: number,
+): { leftPct: number; widthPct: number } {
+  if (max <= min) return { leftPct: 0, widthPct: 100 };
+  const total = max - min + 1;
+  let widthPct = (viewLen / total) * 100;
+  if (widthPct > 100) widthPct = 100;
+  const startClamped = Math.min(Math.max(start, min), Math.max(min, max - viewLen + 1));
+  let leftPct = ((startClamped - min) / total) * 100;
+  if (leftPct + widthPct > 100) leftPct = 100 - widthPct;
+  if (leftPct < 0) leftPct = 0;
+  return { leftPct, widthPct };
+}
+
 /* ---------- 标签 ---------- */
 
 /** 'degree' 标签：音级 1-7 带 ♯/♭/♮（按字母对齐调内音级，记号取该键实际拼写） */
@@ -319,6 +347,54 @@ function svgEl<K extends keyof SVGElementTagNameMap>(
   const el = document.createElementNS(SVG_NS, tag) as SVGElementTagNameMap[K];
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
   return el;
+}
+
+/**
+ * rangeBar 缩略键盘（mini-map）：[min..max] 全部可拖键逐键微缩渲染。
+ * 白键 = 满高窄矩形条纹（viewBox 每白键 10 单位），黑键 = 更短的深色小方块居中贴白键缝
+ * （与 keyHitRect 同一 whiteIndexOf 对缝算法，真实黑白键位置），黑键后置压在白键上。
+ * SVG 只画一次（音域固定），CSS 拉伸铺满条宽、定高 20px 底对齐。
+ */
+function buildMiniKeyboard(min: number, max: number): SVGSVGElement {
+  const UW = 10; // 每白键宽（viewBox 单位）
+  const H = 24; // viewBox 高（CSS 定高后等比压扁）
+  const BW = 6; // 黑键宽（单位）
+  const BH = 13; // 黑键高：贴顶、比白键短
+  let whiteCount = 0;
+  for (let m = min; m <= max; m++) if (!midiToKeyDef(m).isBlack) whiteCount++;
+  const width = Math.max(1, whiteCount) * UW;
+  const svg = svgEl('svg', {
+    viewBox: `0 0 ${width} ${H}`,
+    class: 'piano-bar__mini',
+    preserveAspectRatio: 'none',
+    'aria-hidden': 'true',
+  });
+  // 白键条纹先铺
+  let wi = 0;
+  for (let m = min; m <= max; m++) {
+    if (midiToKeyDef(m).isBlack) continue;
+    svg.append(
+      svgEl('rect', {
+        x: String(wi * UW),
+        y: '0',
+        width: String(UW),
+        height: String(H),
+        fill: 'var(--sheet-paper)',
+        stroke: 'var(--key-stroke)',
+        'stroke-width': '0.6',
+      }),
+    );
+    wi++;
+  }
+  // 黑键后置（z 序压白键）：中心对白键缝隙，条两端 clamp 防溢出
+  for (let m = min; m <= max; m++) {
+    if (!midiToKeyDef(m).isBlack) continue;
+    const x = Math.min(width - BW, Math.max(0, whiteIndexOf(m, min) * UW - BW / 2));
+    svg.append(
+      svgEl('rect', { x: String(x), y: '0', width: String(BW), height: String(BH), fill: 'var(--key-black-1)' }),
+    );
+  }
+  return svg;
 }
 
 const MARK_FILL: Partial<Record<KeyMarkKind, string>> = {
@@ -426,12 +502,17 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
     text: '›',
     on: { click: () => void shiftOctave(1) },
   });
-  /** rangeBar：thumb（视窗指示，pointer 事件统一走轨道）+ 滑轨（音域文字居中覆盖其上） */
-  const thumbEl = opts.rangeBar
-    ? h('div', { className: 'piano-bar__thumb', attrs: { 'aria-hidden': 'true' } })
+  /** rangeBar：缩略键盘 mini-map（全可拖音域）+ 视窗框（音域文字随框移动） */
+  const viewportEl = opts.rangeBar
+    ? h('div', { className: 'piano-bar__viewport' }, rangeEl)
     : null;
-  const trackEl = thumbEl
-    ? h('div', { className: 'piano-bar__track' }, thumbEl, rangeEl)
+  const trackEl = viewportEl
+    ? h(
+        'div',
+        { className: 'piano-bar__track' },
+        buildMiniKeyboard(minStart, maxStart + G.VIEW_KEYS - 1),
+        viewportEl,
+      )
     : null;
   const bar = h(
     'div',
@@ -534,8 +615,12 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
   function updateBar(): void {
     prevBtn.disabled = disabled || viewStart <= minStart;
     nextBtn.disabled = disabled || viewStart >= maxStart;
-    // thumb 位置 = 视窗在可拖全音域中的比例（随 render / setDisabled 同步）
-    if (thumbEl) thumbEl.style.left = `${thumbRatio(viewStart, minStart, maxStart) * 100}%`;
+    // 视窗框 = 当前视窗在缩略键盘上的位置（随 render / setDisabled 同步移动）
+    if (viewportEl) {
+      const box = viewportBoxLayout(viewStart, G.VIEW_KEYS, minStart, maxStart + G.VIEW_KEYS - 1);
+      viewportEl.style.left = `${box.leftPct}%`;
+      viewportEl.style.width = `${box.widthPct}%`;
+    }
   }
 
   /* ---------- 标记 / 选中 ---------- */
@@ -725,19 +810,30 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
     return { startMidi: viewStart, endMidi: viewStart + G.VIEW_KEYS - 1 };
   }
 
-  /* ---------- rangeBar：轨道拖动平移视窗（事件只挂轨道自身，不进键手势） ---------- */
+  /* ---------- rangeBar：缩略键盘/视窗框拖动平移视窗（事件只挂轨道自身，不进键手势） ---------- */
 
   let dragPointerId: number | null = null;
+  /** 按下点相对视窗起点的键偏移（拖框时保持按下偏移 → 跟手） */
+  let dragOffsetKeys = 0;
 
-  /** 轨道 x 比例 → 视窗起点（同值跳过，不重绘） */
-  function seekFromClientX(clientX: number): void {
-    if (!trackEl) return;
+  /**
+   * 缩略条 clientX → 键位坐标：条覆盖全部可拖键（首键 minStart、
+   * 末键 maxStart+VIEW_KEYS-1，总键数 = maxStart+VIEW_KEYS-minStart）；
+   * 轨道宽为 0（未布局）时返回 null。
+   */
+  function keyAtClientX(clientX: number): number | null {
+    if (!trackEl) return null;
     const rect = trackEl.getBoundingClientRect();
-    const ratio = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
-    setViewStart(startFromRatio(ratio, minStart, maxStart));
+    if (rect.width <= 0) return null;
+    const totalKeys = maxStart + G.VIEW_KEYS - minStart;
+    return minStart + ((clientX - rect.left) / rect.width) * totalKeys;
   }
 
-  /** pointerdown：捕获 → 拖动开始（haptic）→ 点 thumb / 轨道空白处都直接跳到该位置（tap-to-seek） */
+  /**
+   * pointerdown：捕获 → 拖动开始（haptic）。
+   * 按在视窗框内：只记按下偏移（不跳位），随后拖动按偏移跟手平移；
+   * 按在缩略图空白处：tap-to-seek，框中心对准点击点后同样进入拖动。
+   */
   function onTrackDown(e: PointerEvent): void {
     if (disabled || dragPointerId !== null) return;
     e.preventDefault();
@@ -746,23 +842,29 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
     try {
       trackEl?.setPointerCapture(e.pointerId);
     } catch {
-      // 指针捕获不可用时退回轨道内命中（拖出轨道由 ratio clamp 兜底）
+      // 指针捕获不可用时退回轨道内命中（拖出轨道由 clamp 兜底）
     }
-    thumbEl?.classList.add('is-dragging');
+    viewportEl?.classList.add('is-dragging');
     void haptic('light');
-    seekFromClientX(e.clientX);
+    const key = keyAtClientX(e.clientX);
+    if (key === null) return;
+    const onBox = viewportEl !== null && e.target instanceof Node && viewportEl.contains(e.target);
+    if (!onBox) setViewStart(key - G.VIEW_KEYS / 2); // 框中心对准点击点（setViewStart 内 round+clamp）
+    dragOffsetKeys = key - viewStart;
   }
 
   function onTrackMove(e: PointerEvent): void {
     if (e.pointerId !== dragPointerId) return;
     e.stopPropagation();
-    seekFromClientX(e.clientX);
+    const key = keyAtClientX(e.clientX);
+    if (key === null) return;
+    setViewStart(key - dragOffsetKeys); // 保持按下偏移 → 框跟手平移
   }
 
   function endTrackDrag(e: PointerEvent): void {
     if (e.pointerId !== dragPointerId) return;
     dragPointerId = null;
-    thumbEl?.classList.remove('is-dragging');
+    viewportEl?.classList.remove('is-dragging');
   }
 
   if (trackEl) {

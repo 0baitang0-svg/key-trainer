@@ -10,6 +10,7 @@ import {
   pianoKeyDefs,
   startFromRatio,
   thumbRatio,
+  viewportBoxLayout,
   viewportKeyDefs,
 } from '../src/ui/components/piano-keyboard';
 
@@ -252,6 +253,70 @@ describe('thumbRatio / startFromRatio（rangeBar 拖动映射纯函数）', () =
   it('往返闭环：startFromRatio(thumbRatio(s)) === s（36..84 全扫）', () => {
     for (let s = 36; s <= 84; s++) {
       expect(startFromRatio(thumbRatio(s, 36, 84), 36, 84)).toBe(s);
+    }
+  });
+});
+
+describe('viewportBoxLayout（缩略图视窗框布局纯函数）', () => {
+  const G = GEOMETRY.std;
+  const min = 36;
+  const max = 84 + G.VIEW_KEYS - 1; // 100：全可拖末键（maxStart=84 起末窗的末键）
+  const total = max - min + 1; // 65 键
+
+  it('框宽 = viewLen/总键数；首窗贴左缘、末窗左+右 = 100%', () => {
+    expect(G.VIEW_KEYS).toBe(17);
+    expect(total).toBe(65);
+    const first = viewportBoxLayout(min, G.VIEW_KEYS, min, max);
+    expect(first.leftPct).toBe(0);
+    expect(first.widthPct).toBeCloseTo((17 / 65) * 100, 9);
+    const last = viewportBoxLayout(84, G.VIEW_KEYS, min, max); // start = maxStart
+    expect(last.leftPct + last.widthPct).toBeCloseTo(100, 9);
+  });
+
+  it('中间位置：leftPct = (start-min)/总键数×100，与 thumbRatio 起点域等价', () => {
+    const box = viewportBoxLayout(60, 17, min, max);
+    expect(box.leftPct).toBeCloseTo((24 / 65) * 100, 9);
+    expect(thumbRatio(60, 36, 84)).toBe(0.5);
+    // 左可用段 = 100% - 框宽：中点起点即该段中点（与 thumbRatio 同一映射）
+    expect(box.leftPct).toBeCloseTo(0.5 * (100 - box.widthPct), 9);
+  });
+
+  it('start 越界 clamp：低于 min → 贴左；高于末窗 → 贴右；扫描恒在 0..100 内', () => {
+    expect(viewportBoxLayout(10, 17, min, max).leftPct).toBe(0);
+    const high = viewportBoxLayout(200, 17, min, max);
+    expect(high.leftPct + high.widthPct).toBeCloseTo(100, 9);
+    for (let s = 20; s <= 110; s++) {
+      const b = viewportBoxLayout(s, 17, min, max);
+      expect(b.leftPct).toBeGreaterThanOrEqual(0);
+      expect(b.widthPct).toBeGreaterThan(0);
+      expect(b.leftPct + b.widthPct).toBeLessThanOrEqual(100 + 1e-9);
+    }
+  });
+
+  it('wide 视窗（24 键，全可拖末键 107）：末窗左+右 = 100%，框宽 = 24/72', () => {
+    const W = GEOMETRY.wide;
+    const wMax = 84 + W.VIEW_KEYS - 1; // 107
+    expect(wMax - 36 + 1).toBe(72);
+    const box = viewportBoxLayout(84, W.VIEW_KEYS, 36, wMax);
+    expect(box.widthPct).toBeCloseTo((24 / 72) * 100, 9);
+    expect(box.leftPct).toBeCloseTo((48 / 72) * 100, 9);
+    expect(box.leftPct + box.widthPct).toBeCloseTo(100, 9);
+  });
+
+  it('退化：max <= min → 整条即框 {0,100}；viewLen 超总键数 → 宽 clamp 100%', () => {
+    expect(viewportBoxLayout(60, 17, 40, 40)).toEqual({ leftPct: 0, widthPct: 100 });
+    expect(viewportBoxLayout(60, 17, 50, 40)).toEqual({ leftPct: 0, widthPct: 100 });
+    const over = viewportBoxLayout(36, 17, 36, 40); // 总键 5 < viewLen 17
+    expect(over.widthPct).toBe(100);
+    expect(over.leftPct).toBe(0);
+  });
+
+  it('单调：start 递增 → 框左缘不回退（拖动 / ‹ › 步进视觉一致）', () => {
+    let prev = -1;
+    for (let s = 36; s <= 84; s++) {
+      const b = viewportBoxLayout(s, 17, min, max);
+      expect(b.leftPct).toBeGreaterThanOrEqual(prev);
+      prev = b.leftPct;
     }
   });
 });
