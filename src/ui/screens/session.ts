@@ -622,6 +622,7 @@ export function sessionScreen(ctx: AppContext, params: unknown): ScreenInstance 
       view: keyboardView(),
       interactive: true,
       pressMode: true,
+      rangeBar: true,
       onPressDown: (midi) => onSeqPressDown(midi),
       onPressUp: (midi) => seqPressed.delete(midi),
     });

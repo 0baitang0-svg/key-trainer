@@ -8,6 +8,8 @@ import {
   keyHitRect,
   midiToKeyDef,
   pianoKeyDefs,
+  startFromRatio,
+  thumbRatio,
   viewportKeyDefs,
 } from '../src/ui/components/piano-keyboard';
 
@@ -220,5 +222,78 @@ describe('cWindowStart（ensureRange 视窗对齐纯计算）', () => {
         expect(start).toBeLessThanOrEqual(84);
       }
     }
+  });
+});
+
+describe('thumbRatio / startFromRatio（rangeBar 拖动映射纯函数）', () => {
+  it('thumbRatio：端点 0/1、中点、越界 clamp', () => {
+    expect(thumbRatio(36, 36, 84)).toBe(0);
+    expect(thumbRatio(84, 36, 84)).toBe(1);
+    expect(thumbRatio(60, 36, 84)).toBe(0.5);
+    expect(thumbRatio(48, 36, 84)).toBe(0.25);
+    expect(thumbRatio(30, 36, 84)).toBe(0); // 低于 min → clamp 0
+    expect(thumbRatio(96, 36, 84)).toBe(1); // 高于 max → clamp 1
+    expect(thumbRatio(60, 48, 48)).toBe(0); // 跨度为 0 → 0
+  });
+
+  it('startFromRatio：端点 0/1、中点、round 取整、ratio clamp', () => {
+    expect(startFromRatio(0, 36, 84)).toBe(36);
+    expect(startFromRatio(1, 36, 84)).toBe(84);
+    expect(startFromRatio(0.5, 36, 84)).toBe(60);
+    expect(startFromRatio(-0.3, 36, 84)).toBe(36); // ratio clamp 低
+    expect(startFromRatio(1.4, 36, 84)).toBe(84); // ratio clamp 高
+    // round：36 + ratio×48 取整 → 半音级任意起点（不强制八度对齐）
+    expect(startFromRatio(0.1, 36, 84)).toBe(41); // 36+4.8 → 41
+    expect(startFromRatio(1 / 3, 36, 84)).toBe(52); // 36+16 → 52
+    expect(startFromRatio(0.75, 36, 84)).toBe(72);
+    expect(startFromRatio(0.5, 48, 48)).toBe(48); // 跨度为 0 → min
+  });
+
+  it('往返闭环：startFromRatio(thumbRatio(s)) === s（36..84 全扫）', () => {
+    for (let s = 36; s <= 84; s++) {
+      expect(startFromRatio(thumbRatio(s, 36, 84), 36, 84)).toBe(s);
+    }
+  });
+});
+
+describe('任意可视起点（非 C 对齐）的键位与命中矩形', () => {
+  const blackPcs = new Set([1, 3, 6, 8, 10]);
+
+  it('start=52（E3）/ 49（C♯3，黑键打头）：17 键连续、黑白键判定逐键正确', () => {
+    for (const start of [52, 49]) {
+      const defs = viewportKeyDefs(start);
+      expect(defs).toHaveLength(17);
+      expect(defs.map((d) => d.midi)).toEqual(Array.from({ length: 17 }, (_, i) => start + i));
+      for (const d of defs) {
+        expect(d.isBlack, `midi ${d.midi}`).toBe(blackPcs.has(((d.midi % 12) + 12) % 12));
+        const hit = keyHitRect(d.midi, start);
+        expect(hit.isBlack).toBe(d.isBlack);
+        expect(hit.width).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('start=52（E3 起）：仍 10 白 7 黑，白键连续铺满 360 viewBox', () => {
+    const defs = viewportKeyDefs(52);
+    expect(defs.filter((d) => !d.isBlack)).toHaveLength(10);
+    expect(defs.filter((d) => d.isBlack)).toHaveLength(7);
+    expect(defs[0]).toMatchObject({ midi: 52, letter: 'E', oct: 3, isBlack: false });
+    expect(defs[16]).toMatchObject({ midi: 68, letter: 'G', acc: 1, oct: 4, isBlack: true });
+    const whites = defs.filter((d) => !d.isBlack);
+    expect(keyHitRect(whites[0].midi, 52)).toMatchObject({ x: 0, isBlack: false });
+    const last = keyHitRect(whites[whites.length - 1].midi, 52);
+    expect(last.x + last.width).toBe(KEY_GEOMETRY.VIEW_W); // 360
+  });
+
+  it('start=49（C♯3 起，黑键打头）：10 白 7 黑，首键黑键热区贴 viewBox 左缘', () => {
+    const defs = viewportKeyDefs(49);
+    expect(defs.filter((d) => !d.isBlack)).toHaveLength(10);
+    expect(defs.filter((d) => d.isBlack)).toHaveLength(7);
+    expect(defs[0]).toMatchObject({ midi: 49, letter: 'C', acc: 1, oct: 3, isBlack: true });
+    const first = keyHitRect(49, 49);
+    expect(first.isBlack).toBe(true);
+    // 黑键热区左右外扩后从缝隙左侧起（x = 3 - 11 - 6 = -14），绘制裁切在 viewBox 内
+    expect(first.x).toBe(KEY_GEOMETRY.BLACK_DX - KEY_GEOMETRY.BLACK_W / 2 - KEY_GEOMETRY.HIT_PAD_X);
+    expect(first.x + first.width).toBeGreaterThan(0);
   });
 });

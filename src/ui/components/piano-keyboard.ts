@@ -2,7 +2,8 @@
  * SVG 钢琴键盘组件：触控视窗（std = 1.5 八度 10 白 7 黑；wide = 2 八度 14 白 10 黑）。
  * 触控重设计：白键 36 单位（std 375px 屏≈32 CSS px）、黑键 22 单位（≈20 px），
  * 黑键热区左右 +6 / 下方 +12 盖住白键缝隙且命中优先；点滑连续选择、按压反馈、
- * 八度切换（‹ › 按钮 + 键盘左右边缘 24px 内水平滑动翻页）。
+ * 八度切换（‹ › 按钮 + 键盘左右边缘 24px 内水平滑动翻页）；视奏可选 rangeBar：
+ * 八度条中段即滑轨，拖 thumb / 点轨道按 x 比例连续平移视窗（半音级，不打断按键手势）。
  * 视奏作答走 pressMode 独立手势分支（多指并发按下/抬起，不进 toggle/点滑路径）；
  * ensureRange 出题时把视窗平移到覆盖目标区间的 C 对齐窗口。
  * 标记（target/selected/correct/wrong/ghost）、键底小字标签沿用原体系。
@@ -60,6 +61,11 @@ export interface KeyboardOptions {
   onPressUp?: (midi: number) => void;
   /** 八度（视窗）切换回调 */
   onViewChange?: (view: { startMidi: number; endMidi: number }) => void;
+  /**
+   * 视奏专用：八度条中段变可拖滑轨（thumb 拖动 / 点轨道 tap-to-seek 连续平移视窗）。
+   * 指针事件挂在轨道自身（stopPropagation），不冒泡到键，pressMode 手势零干扰。
+   */
+  rangeBar?: boolean;
 }
 
 export interface PianoKeyboard {
@@ -256,6 +262,27 @@ export function cWindowStart(
   return Math.min(maxStart, Math.max(minStart, start));
 }
 
+/* ---------- rangeBar 拖动映射（纯计算） ---------- */
+
+/**
+ * thumb 位置比例（0..1，clamp）：viewStart 在可拖全音域 [min,max] 中的相对位置。
+ * max <= min（跨度为 0）时恒为 0。
+ */
+export function thumbRatio(start: number, min: number, max: number): number {
+  if (max <= min) return 0;
+  return Math.min(1, Math.max(0, (start - min) / (max - min)));
+}
+
+/**
+ * 比例（0..1，clamp）→ 视窗起点：min + ratio*(max-min) 取整，
+ * 半音级连续平移（不强制八度对齐）；max <= min 时恒为 min。
+ */
+export function startFromRatio(ratio: number, min: number, max: number): number {
+  if (max <= min) return min;
+  const r = Math.min(1, Math.max(0, ratio));
+  return Math.round(min + r * (max - min));
+}
+
 /* ---------- 标签 ---------- */
 
 /** 'degree' 标签：音级 1-7 带 ♯/♭/♮（按字母对齐调内音级，记号取该键实际拼写） */
@@ -399,11 +426,18 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
     text: '›',
     on: { click: () => void shiftOctave(1) },
   });
+  /** rangeBar：thumb（视窗指示，pointer 事件统一走轨道）+ 滑轨（音域文字居中覆盖其上） */
+  const thumbEl = opts.rangeBar
+    ? h('div', { className: 'piano-bar__thumb', attrs: { 'aria-hidden': 'true' } })
+    : null;
+  const trackEl = thumbEl
+    ? h('div', { className: 'piano-bar__track' }, thumbEl, rangeEl)
+    : null;
   const bar = h(
     'div',
-    { className: 'piano-bar' },
+    { className: opts.rangeBar ? 'piano-bar piano-bar--range' : 'piano-bar' },
     prevBtn,
-    h('div', { className: 'piano-bar__center' }, rangeEl, hintEl),
+    h('div', { className: 'piano-bar__center' }, ...(trackEl ? [trackEl] : [rangeEl]), hintEl),
     nextBtn,
   );
   const root = h('div', { className: 'piano-wrap' }, bar, svg);
@@ -500,6 +534,8 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
   function updateBar(): void {
     prevBtn.disabled = disabled || viewStart <= minStart;
     nextBtn.disabled = disabled || viewStart >= maxStart;
+    // thumb 位置 = 视窗在可拖全音域中的比例（随 render / setDisabled 同步）
+    if (thumbEl) thumbEl.style.left = `${thumbRatio(viewStart, minStart, maxStart) * 100}%`;
   }
 
   /* ---------- 标记 / 选中 ---------- */
@@ -689,6 +725,62 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
     return { startMidi: viewStart, endMidi: viewStart + G.VIEW_KEYS - 1 };
   }
 
+  /* ---------- rangeBar：轨道拖动平移视窗（事件只挂轨道自身，不进键手势） ---------- */
+
+  let dragPointerId: number | null = null;
+
+  /** 轨道 x 比例 → 视窗起点（同值跳过，不重绘） */
+  function seekFromClientX(clientX: number): void {
+    if (!trackEl) return;
+    const rect = trackEl.getBoundingClientRect();
+    const ratio = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
+    setViewStart(startFromRatio(ratio, minStart, maxStart));
+  }
+
+  /** pointerdown：捕获 → 拖动开始（haptic）→ 点 thumb / 轨道空白处都直接跳到该位置（tap-to-seek） */
+  function onTrackDown(e: PointerEvent): void {
+    if (disabled || dragPointerId !== null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragPointerId = e.pointerId;
+    try {
+      trackEl?.setPointerCapture(e.pointerId);
+    } catch {
+      // 指针捕获不可用时退回轨道内命中（拖出轨道由 ratio clamp 兜底）
+    }
+    thumbEl?.classList.add('is-dragging');
+    void haptic('light');
+    seekFromClientX(e.clientX);
+  }
+
+  function onTrackMove(e: PointerEvent): void {
+    if (e.pointerId !== dragPointerId) return;
+    e.stopPropagation();
+    seekFromClientX(e.clientX);
+  }
+
+  function endTrackDrag(e: PointerEvent): void {
+    if (e.pointerId !== dragPointerId) return;
+    dragPointerId = null;
+    thumbEl?.classList.remove('is-dragging');
+  }
+
+  if (trackEl) {
+    trackEl.addEventListener('pointerdown', onTrackDown);
+    trackEl.addEventListener('pointermove', onTrackMove);
+    trackEl.addEventListener('pointerup', endTrackDrag);
+    trackEl.addEventListener('pointercancel', endTrackDrag);
+  }
+
+  /** 连续平移视窗：clamp → 同值跳过 → 重绘 + onViewChange（音域文字 / thumb 随 render 更新） */
+  function setViewStart(start: number): void {
+    const next = Math.min(maxStart, Math.max(minStart, Math.round(start)));
+    if (next === viewStart) return;
+    viewStart = next;
+    render();
+    opts.onViewChange?.(getViewRange());
+  }
+
   function shiftOctave(dir: number): boolean {
     const next = Math.min(maxStart, Math.max(minStart, viewStart + dir * 12));
     if (next === viewStart) return false;
@@ -745,6 +837,13 @@ export function pianoKeyboard(opts: KeyboardOptions): PianoKeyboard {
         window.removeEventListener('pointerup', onPointerUp);
         window.removeEventListener('pointercancel', onPointerCancel);
       }
+      if (trackEl) {
+        trackEl.removeEventListener('pointerdown', onTrackDown);
+        trackEl.removeEventListener('pointermove', onTrackMove);
+        trackEl.removeEventListener('pointerup', endTrackDrag);
+        trackEl.removeEventListener('pointercancel', endTrackDrag);
+      }
+      dragPointerId = null;
       gesture = null;
       pointers.clear();
       root.remove();

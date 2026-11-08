@@ -2276,6 +2276,84 @@ svg.piano.is-interactive {
   background: var(--accent);
 }
 
+/* ---------- rangeBar（视奏）：八度条中段 = 可拖滑轨，thumb 指示当前视窗 ----------
+   拖 thumb / 点轨道空白处平移视窗（半音级），指针事件只在轨道上，不进键手势 */
+
+.piano-bar__track {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  /* 轨道触控高度 ≥44px（含 1px 边框 = 46px） */
+  height: 44px;
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  background: var(--glass-2);
+  box-shadow: var(--glass-rim);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  touch-action: none; /* 拖动平移视窗，不触发页面滚动 */
+  cursor: pointer;
+}
+
+.piano-bar__thumb {
+  position: absolute;
+  top: 5px;
+  bottom: 5px; /* 轨道内高 42 → thumb 高 32px（28–32 达标） */
+  width: 40px;
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  background: var(--glass);
+  box-shadow: var(--glass-rim);
+  transform: translateX(-50%);
+  z-index: 0;
+}
+
+/* thumb 可点区域外扩到 ≥44×44（事件冒泡到轨道统一处理） */
+.piano-bar__thumb::after {
+  content: '';
+  position: absolute;
+  inset: -6px -2px;
+}
+
+.piano-bar__thumb.is-dragging {
+  transform: translateX(-50%) scale(1.06);
+  box-shadow: var(--glass-rim), 0 4px 14px rgb(0 0 0 / 0.3);
+}
+
+/* 两端留出 thumb 半宽：ratio 0/1 时 thumb 全部落在轨道内，不压 ‹ › 按钮 */
+.piano-bar--range .piano-bar__center {
+  padding-inline: 20px;
+}
+
+/* 音域文字（如 C3–E4）居中覆盖轨道，随拖动实时更新；不拦截指针 */
+.piano-bar__track .piano-bar__range {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .piano-bar__thumb {
+    transition:
+      left 140ms ease,
+      transform 140ms ease,
+      box-shadow 140ms ease;
+  }
+
+  /* 拖动中 left 不过渡（跟手），只过渡放大高亮 */
+  .piano-bar__thumb.is-dragging {
+    transition:
+      transform 120ms ease,
+      box-shadow 120ms ease;
+  }
+}
+
 .piano .pk {
   cursor: pointer;
 }
